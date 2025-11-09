@@ -117,7 +117,7 @@ ledger_ai/
   ```
 
 ## Known Issues
-- [Mention any current issues that are being worked on]
+- None Right Now.
 
 ## Next Steps
 - Implementation of AI features for transaction analysis
