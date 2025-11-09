@@ -125,4 +125,4 @@ ledger_ai/
 - Additional financial reporting features
 
 ## Contact
-[Your contact information or supervisor's contact information]
+[if i have to make changes, Sir you can contact me on teams.]
