@@ -1,0 +1,16 @@
+Django>=4.2
+djangorestframework
+django-cors-headers
+django-filter
+psycopg2-binary
+celery[redis]
+redis
+pillow
+pytesseract
+torch
+transformers
+scikit-learn
+pandas
+prophet
+gunicorn
+python-dotenv

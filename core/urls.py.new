@@ -1,0 +1,30 @@
+from rest_framework import routers
+from django.urls import path
+from django.views.decorators.csrf import ensure_csrf_cookie
+from django.views.decorators.http import require_http_methods
+from django.http import JsonResponse
+from .views import (
+    TransactionViewSet,
+    register,
+    login_view,
+    logout_view,
+    current_user
+)
+
+router = routers.DefaultRouter()
+router.register(r'transactions', TransactionViewSet, basename='transaction')
+
+@require_http_methods(["GET"])
+@ensure_csrf_cookie
+def get_csrf_token(request):
+    from django.middleware.csrf import get_token
+    token = get_token(request)
+    return JsonResponse({'csrfToken': token})
+
+urlpatterns = [
+    path('auth/csrf/', get_csrf_token, name='csrf_token'),
+    path('auth/register/', register, name='register'),
+    path('auth/login/', login_view, name='login'),
+    path('auth/logout/', logout_view, name='logout'),
+    path('auth/user/', current_user, name='current_user'),
+] + router.urls
