@@ -14,3 +14,8 @@ pandas
 prophet
 gunicorn
 python-dotenv
+cloudinary
+django-cloudinary-storage
+spacy
+python-dateutil
+nepali-datetime

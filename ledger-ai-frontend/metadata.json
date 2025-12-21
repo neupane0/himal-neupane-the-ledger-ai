@@ -1,0 +1,8 @@
+{
+  "name": "Copy of Ledger AI",
+  "description": "A minimalist, monochrome personal finance tracker powered by Gemini AI for smart categorization, receipt scanning, and forecasting.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}

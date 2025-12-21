@@ -8,7 +8,16 @@ from .views import (
     register,
     login_view,
     logout_view,
-    current_user
+    current_user,
+    ReceiptUploadView,
+    ExportTransactionsView,
+    ImportTransactionsView,
+    CategoryListView,
+    CategoryStatsView,
+    BulkCategorizeView,
+    categorize_with_ai,
+    parse_voice_input,
+    debug_ocr_text
 )
 
 router = routers.DefaultRouter()
@@ -27,4 +36,13 @@ urlpatterns = [
     path('auth/login/', login_view, name='login'),
     path('auth/logout/', logout_view, name='logout'),
     path('auth/user/', current_user, name='current_user'),
+    path('upload-receipt/', ReceiptUploadView.as_view(), name='upload_receipt'),
+    path('transactions/export/', ExportTransactionsView.as_view(), name='export_transactions'),
+    path('transactions/import/', ImportTransactionsView.as_view(), name='import_transactions'),
+    path('categories/', CategoryListView.as_view(), name='category_list'),
+    path('categories/stats/', CategoryStatsView.as_view(), name='category_stats'),
+    path('transactions/bulk-categorize/', BulkCategorizeView.as_view(), name='bulk_categorize'),
+    path('ai/categorize/', categorize_with_ai, name='categorize_ai'),
+    path('ai/parse-voice/', parse_voice_input, name='parse_voice'),
+    path('debug/ocr/', debug_ocr_text, name='debug_ocr'),  # Debug endpoint
 ] + router.urls

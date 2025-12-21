@@ -1,0 +1,72 @@
+# Quick Test - Upload This and Check Console
+
+## Step 1: Save this as a text file and copy the content
+
+```
+Walmart Supercenter
+123 Main Street
+Springfield, USA
+
+Date: 12/21/2025
+Time: 14:30
+
+Milk            $3.99
+Bread           $2.49
+Eggs            $4.50
+
+Subtotal       $10.98
+Tax             $0.88
+Total          $11.86
+
+Thank you for shopping!
+```
+
+## Step 2: Restart Django
+
+```bash
+cd C:\FYP\Himal\ledger_ai
+.venv\Scripts\activate
+python manage.py runserver
+```
+
+## Step 3: Upload a receipt and watch the console
+
+You should see:
+```
+INFO OCR Extracted Text:
+[The extracted text from your receipt]
+==================================================
+
+INFO [parse_receipt_text] Input text length: 123
+INFO [parse_receipt_text] First 200 chars: Walmart...
+INFO [extract_entities] Amount from regex: 11.86
+INFO [extract_entities] Date from regex: 2025-12-21
+INFO [extract_entities] Text being parsed for date: Walmart...
+INFO [parse_receipt_text] Extracted entities: {'merchant': 'Walmart', 'amount': 11.86, 'date': '2025-12-21', 'items': []}
+INFO [parse_receipt_text] Final result: {'title': 'Walmart', 'amount': 11.86, 'date': '2025-12-21', 'category': 'Groceries'}
+```
+
+## Step 4: If date is still None
+
+**Copy the OCR text from console** and test it manually:
+
+```bash
+cd C:\FYP\Himal\ledger_ai
+.venv\Scripts\activate
+python
+```
+
+Then:
+```python
+from core.ai_service import _extract_date_regex
+
+# Paste your OCR text here
+text = """
+[PASTE THE OCR OUTPUT FROM CONSOLE HERE]
+"""
+
+date = _extract_date_regex(text)
+print(f"Date found: {date}")
+```
+
+This will tell us if the date is in the OCR text at all!

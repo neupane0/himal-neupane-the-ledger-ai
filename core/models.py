@@ -9,6 +9,7 @@ class Transaction(models.Model):
     date = models.DateField(default=timezone.now)
     category = models.CharField(max_length=100, blank=True, default="")
     notes = models.TextField(blank=True, default="")
+    receipt_image = models.ImageField(upload_to='receipts/', blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     

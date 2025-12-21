@@ -46,6 +46,8 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     "django_filters",
+    'cloudinary',
+    'cloudinary_storage',
 
     # local apps
     'core',
@@ -137,9 +139,11 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
+    "http://127.0.0.1:3000",
 ]
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:3000",
+    "http://127.0.0.1:3000",
 ]
 
 SESSION_COOKIE_SECURE = False  # Set to True in production with HTTPS
@@ -149,6 +153,7 @@ SESSION_COOKIE_AGE = 86400  # 24 hours in seconds
 CSRF_COOKIE_SECURE = False  # Set to True in production with HTTPS
 CSRF_COOKIE_SAMESITE = 'Lax'
 CSRF_COOKIE_AGE = 86400  # 24 hours in seconds
+CSRF_COOKIE_HTTPONLY = False  # Allow JavaScript to read CSRF cookie
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
@@ -158,4 +163,19 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+}
+
+CLOUDINARY_STORAGE = {
+    'CLOUD_NAME': os.getenv('CLOUDINARY_CLOUD_NAME'),
+    'API_KEY': os.getenv('CLOUDINARY_API_KEY'),
+    'API_SECRET': os.getenv('CLOUDINARY_API_SECRET'),
+}
+
+STORAGES = {
+    "default": {
+        "BACKEND": "cloudinary_storage.storage.MediaCloudinaryStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
 }
