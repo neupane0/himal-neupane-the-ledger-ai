@@ -4,11 +4,292 @@ Replaces Gemini API with local open-source models
 """
 
 import re
+import json
+import os
+import urllib.request
+import urllib.error
 from datetime import datetime
 from typing import Dict, Optional, List
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _ollama_chat_json(messages: List[Dict[str, str]]) -> Optional[Dict]:
+    """Call a local Ollama server and return parsed JSON content.
+
+    Expected: Ollama running locally (default http://localhost:11434).
+    Uses Ollama chat endpoint with format=json.
+    """
+    base_url = os.getenv("LEDGER_AI_OLLAMA_URL", "http://localhost:11434").rstrip("/")
+    model = os.getenv("LEDGER_AI_OLLAMA_MODEL", "llama3.1:8b")
+    timeout_s = float(os.getenv("LEDGER_AI_OLLAMA_TIMEOUT", "20"))
+
+    payload = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "format": "json",
+        "options": {
+            "temperature": 0.1,
+        },
+    }
+
+    req = urllib.request.Request(
+        url=f"{base_url}/api/chat",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+    except (urllib.error.URLError, TimeoutError) as e:
+        logger.warning(f"[ollama] Request failed: {e}")
+        return None
+
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        logger.warning("[ollama] Non-JSON response from server")
+        return None
+
+    content = (
+        data.get("message", {})
+        .get("content", "")
+        .strip()
+    )
+    if not content:
+        return None
+
+    # With format=json, content should be valid JSON, but keep a fallback.
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        start = content.find("{")
+        end = content.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            try:
+                return json.loads(content[start : end + 1])
+            except json.JSONDecodeError:
+                return None
+        return None
+
+
+def _maybe_enrich_receipt_with_ollama(ocr_text: str, extracted: Dict[str, Optional[str]], current: Dict[str, any]) -> Dict[str, any]:
+    """Optionally refine receipt fields using local Llama via Ollama.
+
+    Safe-by-default: only runs when LEDGER_AI_USE_OLLAMA=true.
+    By default, only runs when date was NOT detected (date_detected=false) or amount is missing.
+    """
+    debug = _env_flag("LEDGER_AI_OLLAMA_DEBUG", default=False)
+    updated = dict(current)
+
+    # Always expose whether Ollama was used so it's easy to verify locally.
+    updated.setdefault("ollama_used", True)
+    if debug:
+        updated.setdefault("ollama_date_confidence", None)
+        updated.setdefault("ollama_date_reason", None)
+
+    if not _env_flag("LEDGER_AI_USE_OLLAMA", default=False):
+        return updated
+
+    always = _env_flag("LEDGER_AI_OLLAMA_ENRICH_ALWAYS", default=False)
+    needs_help = (not current.get("date_detected")) or (not current.get("amount"))
+    if not (always or needs_help):
+        return updated
+
+    system = (
+        "You are a receipt understanding assistant. "
+        "Given OCR text from a bill/receipt, extract the transaction date and other fields. "
+        "Return ONLY strict JSON (no markdown, no extra text). "
+        "Prefer the bill/transaction date (labels: date, bill date, invoice date, txn date). "
+        "Avoid expiry/mfg/warranty dates. "
+        "If multiple candidates exist, pick the most likely transaction date and explain briefly in date_reason."
+    )
+
+    user = {
+        "ocr_text": ocr_text[:12000],
+        "current_extraction": {
+            "merchant": extracted.get("merchant"),
+            "amount": extracted.get("amount"),
+            "date": extracted.get("date"),
+        },
+        "desired_output_schema": {
+            "merchant": "string or null",
+            "amount": "number or null",
+            "date": "YYYY-MM-DD string or null",
+            "date_confidence": "number 0..1",
+            "date_reason": "short string",
+        },
+    }
+
+    response = _ollama_chat_json(
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
+        ]
+    )
+
+    if not isinstance(response, dict):
+        return updated
+
+    updated["ollama_used"] = True
+    date_value = response.get("date")
+    if isinstance(date_value, str) and re.match(r"^\d{4}-\d{2}-\d{2}$", date_value):
+        updated["date"] = date_value
+        updated["date_detected"] = True
+
+    amount_value = response.get("amount")
+    if isinstance(amount_value, (int, float)) and amount_value > 0:
+        updated["amount"] = float(amount_value)
+
+    merchant_value = response.get("merchant")
+    if isinstance(merchant_value, str) and merchant_value.strip():
+        updated["title"] = merchant_value.strip()[:100]
+
+    if debug:
+        updated["ollama_date_confidence"] = response.get("date_confidence")
+        updated["ollama_date_reason"] = response.get("date_reason")
+
+    logger.info(
+        "[ollama] used=%s date=%s confidence=%s reason=%s",
+        updated.get("ollama_used"),
+        updated.get("date"),
+        updated.get("ollama_date_confidence") if debug else None,
+        updated.get("ollama_date_reason") if debug else None,
+    )
+
+    return updated
+
+
+def _maybe_enrich_voice_with_ollama(transcript_text: str, current: Dict[str, any]) -> Dict[str, any]:
+    """Optionally refine voice-parsed fields using local Llama via Ollama.
+
+    Safe-by-default: only runs when LEDGER_AI_USE_OLLAMA=true.
+    By default, runs only when date wasn't detected or amount is missing.
+    """
+    debug = _env_flag("LEDGER_AI_OLLAMA_DEBUG", default=False)
+    updated = dict(current)
+
+    # Always expose whether Ollama was used.
+    updated.setdefault("ollama_used", False)
+    if debug:
+        updated.setdefault("ollama_date_confidence", None)
+        updated.setdefault("ollama_date_reason", None)
+
+    if not _env_flag("LEDGER_AI_USE_OLLAMA", default=False):
+        return updated
+
+    always = _env_flag("LEDGER_AI_OLLAMA_ENRICH_ALWAYS", default=False)
+    needs_help = (not updated.get("date_detected", False)) or (updated.get("amount") in (None, 0, ""))
+    if not (always or needs_help):
+        return updated
+
+    # Avoid biasing the model with a pre-filled "today" date when we haven't detected any date.
+    current_date = updated.get("date") if updated.get("date_detected", False) else None
+
+    system = (
+        "You are an assistant that extracts structured transaction data from a voice transcript. "
+        "Return ONLY strict JSON (no markdown, no extra text). "
+        "Infer the transaction date if the user said a date (today/yesterday/last Friday or explicit dates). "
+        "For relative dates like 'today' and 'yesterday', compute them relative to the provided 'today' value. "
+        "If no date is stated, return null for date (do NOT invent). "
+        "Return date in YYYY-MM-DD."
+    )
+
+    user = {
+        "transcript": transcript_text[:3000],
+        "today": datetime.now().strftime("%Y-%m-%d"),
+        "current_extraction": {
+            "description": updated.get("description"),
+            "amount": updated.get("amount"),
+            "date": current_date,
+            "category": updated.get("category"),
+            "date_detected": updated.get("date_detected"),
+        },
+        "desired_output_schema": {
+            "description": "string",
+            "amount": "number or null",
+            "date": "YYYY-MM-DD string or null",
+            "date_confidence": "number 0..1",
+            "date_reason": "short string",
+        },
+    }
+
+    response = _ollama_chat_json(
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
+        ]
+    )
+
+    if not isinstance(response, dict):
+        return updated
+
+    updated["ollama_used"] = True
+
+    # Only accept a valid YYYY-MM-DD; allow null meaning "no date stated".
+    date_value = response.get("date")
+    if date_value is None:
+        updated["date_detected"] = False
+        updated["date"] = None
+    elif isinstance(date_value, str) and re.match(r"^\d{4}-\d{2}-\d{2}$", date_value):
+        updated["date"] = date_value
+        updated["date_detected"] = True
+
+    amount_value = response.get("amount")
+    if isinstance(amount_value, (int, float)) and amount_value > 0:
+        updated["amount"] = float(amount_value)
+
+    desc_value = response.get("description")
+    if isinstance(desc_value, str) and desc_value.strip():
+        updated["description"] = desc_value.strip()[:200]
+
+    if debug:
+        updated["ollama_date_confidence"] = response.get("date_confidence")
+        updated["ollama_date_reason"] = response.get("date_reason")
+
+    logger.info(
+        "[ollama-voice] used=%s date=%s confidence=%s reason=%s",
+        updated.get("ollama_used"),
+        updated.get("date"),
+        updated.get("ollama_date_confidence") if debug else None,
+        updated.get("ollama_date_reason") if debug else None,
+    )
+
+    return updated
+
+
+def _extract_relative_date_from_text(text: str) -> Optional[str]:
+    """Extract relative dates like today/yesterday from voice text.
+
+    Returns normalized YYYY-MM-DD string or None.
+    """
+    text_lower = (text or "").lower()
+
+    # English
+    if re.search(r"\byesterday\b", text_lower):
+        return (datetime.now().date()).fromordinal(datetime.now().date().toordinal() - 1).strftime("%Y-%m-%d")
+    if re.search(r"\btoday\b", text_lower):
+        return datetime.now().strftime("%Y-%m-%d")
+
+    # Nepali (common words in transcripts)
+    # आज = today, हिजो/हिज = yesterday
+    if "हिजो" in text or "हिज" in text:
+        return (datetime.now().date()).fromordinal(datetime.now().date().toordinal() - 1).strftime("%Y-%m-%d")
+    if "आज" in text:
+        return datetime.now().strftime("%Y-%m-%d")
+
+    return None
 
 # Global variables to cache loaded models
 _finbert_classifier = None
@@ -667,8 +948,10 @@ def parse_voice_input(transcript: str) -> Dict[str, any]:
     result = {
         'amount': None,
         'category': 'Other',
-        'date': datetime.now().strftime('%Y-%m-%d'),
-        'description': transcript[:200]
+        # Keep date null unless we actually detect it; frontend already falls back to today.
+        'date': None,
+        'description': transcript[:200],
+        'date_detected': False,
     }
     
     # Convert Nepali numerals to English
@@ -679,6 +962,12 @@ def parse_voice_input(transcript: str) -> Dict[str, any]:
     normalized_transcript = transcript
     for nep, eng in devanagari_map.items():
         normalized_transcript = normalized_transcript.replace(nep, eng)
+
+    # Quick relative-date parsing (prevents "yesterday" becoming "today")
+    relative_date = _extract_relative_date_from_text(normalized_transcript)
+    if relative_date:
+        result['date'] = relative_date
+        result['date_detected'] = True
     
     # Nepali keywords for amount extraction
     nepali_amount_keywords = [
@@ -760,6 +1049,7 @@ def parse_voice_input(transcript: str) -> Dict[str, any]:
     # Use extracted date if available
     if entities['date']:
         result['date'] = entities['date']
+        result['date_detected'] = True
     
     # Categorize using AI if not already categorized from Nepali keywords
     if result['category'] == 'Other':
@@ -788,6 +1078,9 @@ def parse_voice_input(transcript: str) -> Dict[str, any]:
         if result['description'] == transcript[:200]:
             result['description'] = entities['merchant']
     
+    # Optional: refine fields with local Llama (Ollama)
+    result = _maybe_enrich_voice_with_ollama(normalized_transcript, result)
+
     logger.info(f"[parse_voice_input] Final result: {result}")
     
     return result
@@ -823,6 +1116,9 @@ def parse_receipt_text(text: str) -> Dict[str, any]:
         'category': categorize_transaction_ai(text),
         'date_detected': date_found  # Flag to show if date was actually found
     }
+
+    # Optional: refine fields with local Llama (Ollama) when OCR is messy.
+    result = _maybe_enrich_receipt_with_ollama(text, entities, result)
     
     logger.info(f"[parse_receipt_text] Final result: {result}")
     

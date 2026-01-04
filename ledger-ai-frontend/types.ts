@@ -9,6 +9,13 @@ export interface Transaction {
   receipt_image?: string;
 }
 
+export interface IncomeSource {
+  id: number;
+  name: string;
+  monthly_amount: number;
+  active: boolean;
+}
+
 export interface Budget {
   id: string;
   category: string;
@@ -49,6 +56,7 @@ export enum AppRoute {
   LOGIN = '/login',
   REGISTER = '/register',
   DASHBOARD = '/dashboard',
+  ASSISTANT = '/assistant',
   TRANSACTIONS = '/transactions',
   ADD_EXPENSE = '/add-expense',
   RECEIPTS = '/receipts',

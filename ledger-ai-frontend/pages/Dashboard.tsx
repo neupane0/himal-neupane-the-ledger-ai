@@ -1,14 +1,17 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Card, Button, AnimatedText } from '../components/UI';
 import { PieChart, Pie, Cell, ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip } from 'recharts';
 import { ArrowUpRight, Wallet, CreditCard, Sparkles } from 'lucide-react';
-import { getForecastInsights } from '../services/geminiService';
-import { transactions } from '../services/api';
+import { ai, incomeSources, transactions } from '../services/api';
+import { AppRoute } from '../types';
 
 const Dashboard: React.FC = () => {
+    const navigate = useNavigate();
     const [insight, setInsight] = useState("Loading AI insights...");
     const [txData, setTxData] = useState<any[]>([]);
-    const [totalBalance, setTotalBalance] = useState(0);
+    const [netThisMonth, setNetThisMonth] = useState(0);
+    const [monthlyIncome, setMonthlyIncome] = useState(0);
     const [monthlyExpenses, setMonthlyExpenses] = useState(0);
     const [spendingTrend, setSpendingTrend] = useState<any[]>([]);
     const [categoryData, setCategoryData] = useState<any[]>([]);
@@ -18,47 +21,82 @@ const Dashboard: React.FC = () => {
     useEffect(() => {
         const fetchData = async () => {
             try {
-                const response = await transactions.getAll();
-                const txs = response.data;
+                const [txResponse, incomeResponse] = await Promise.all([
+                    transactions.getAll(),
+                    incomeSources.getAll(),
+                ]);
+
+                const txs = txResponse.data;
+                const sources = incomeResponse.data as any[];
+
                 setTxData(txs);
 
-                // Calculate Total Balance (Income - Expenses)
-                const balance = txs.reduce((acc: number, tx: any) => acc + parseFloat(tx.amount), 0);
-                setTotalBalance(balance);
+                const isIncomeTx = (tx: any) => String(tx.category || '').toLowerCase() === 'income';
+                const amountOf = (tx: any) => {
+                    const val = typeof tx.amount === 'number' ? tx.amount : parseFloat(tx.amount);
+                    return Number.isFinite(val) ? Math.abs(val) : 0;
+                };
 
-                // Calculate Monthly Expenses (Negative amounts in current month)
-                const currentMonth = new Date().getMonth();
+                const now = new Date();
+                const currentMonth = now.getMonth();
+                const currentYear = now.getFullYear();
+                const inThisMonth = (tx: any) => {
+                    const d = new Date(tx.date);
+                    return d.getFullYear() === currentYear && d.getMonth() === currentMonth;
+                };
+
+                const monthlyIncomeFromTx = txs
+                    .filter((tx: any) => inThisMonth(tx) && isIncomeTx(tx))
+                    .reduce((acc: number, tx: any) => acc + amountOf(tx), 0);
+
+                const monthlyIncomeFromSources = (sources || [])
+                    .filter((s: any) => s && s.active)
+                    .reduce((acc: number, s: any) => {
+                        const val = typeof s.monthly_amount === 'number' ? s.monthly_amount : parseFloat(s.monthly_amount);
+                        return acc + (Number.isFinite(val) ? val : 0);
+                    }, 0);
+
                 const expenses = txs
-                    .filter((tx: any) => parseFloat(tx.amount) < 0 && new Date(tx.date).getMonth() === currentMonth)
-                    .reduce((acc: number, tx: any) => acc + Math.abs(parseFloat(tx.amount)), 0);
-                setMonthlyExpenses(expenses);
+                    .filter((tx: any) => inThisMonth(tx) && !isIncomeTx(tx))
+                    .reduce((acc: number, tx: any) => acc + amountOf(tx), 0);
 
-                // Calculate Spending Trend (Daily expenses)
-                const trendMap = new Map();
-                txs.forEach((tx: any) => {
-                    const date = new Date(tx.date).toLocaleDateString('en-US', { weekday: 'short' });
-                    const amount = parseFloat(tx.amount);
-                    if (amount < 0) {
-                        trendMap.set(date, (trendMap.get(date) || 0) + Math.abs(amount));
-                    }
-                });
-                const trend = Array.from(trendMap, ([name, amount]) => ({ name, amount }));
+                const totalMonthlyIncome = monthlyIncomeFromTx + monthlyIncomeFromSources;
+                setMonthlyIncome(totalMonthlyIncome);
+                setMonthlyExpenses(expenses);
+                setNetThisMonth(totalMonthlyIncome - expenses);
+
+                // Spending Trend (daily expenses for current month)
+                const trendMap = new Map<string, number>();
+                txs
+                    .filter((tx: any) => inThisMonth(tx) && !isIncomeTx(tx))
+                    .forEach((tx: any) => {
+                        const key = String(tx.date);
+                        trendMap.set(key, (trendMap.get(key) || 0) + amountOf(tx));
+                    });
+                const trend = Array.from(trendMap.entries())
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .map(([name, amount]) => ({ name, amount }));
                 setSpendingTrend(trend);
 
-                // Calculate Category Data
-                const catMap = new Map();
-                txs.forEach((tx: any) => {
-                    if (parseFloat(tx.amount) < 0) {
+                // Category Data (expenses only)
+                const catMap = new Map<string, number>();
+                txs
+                    .filter((tx: any) => inThisMonth(tx) && !isIncomeTx(tx))
+                    .forEach((tx: any) => {
                         const cat = tx.category || 'Uncategorized';
-                        catMap.set(cat, (catMap.get(cat) || 0) + Math.abs(parseFloat(tx.amount)));
-                    }
-                });
+                        catMap.set(cat, (catMap.get(cat) || 0) + amountOf(tx));
+                    });
                 const catData = Array.from(catMap, ([name, value]) => ({ name, value }));
                 setCategoryData(catData);
 
                 // Get AI Insights
-                const aiText = await getForecastInsights(trend);
-                setInsight(aiText);
+                try {
+                    const resp = await ai.forecastInsights(trend);
+                    setInsight(resp?.data?.insight || 'Unable to generate insights at this time.');
+                } catch (e) {
+                    console.error('Forecast Error', e);
+                    setInsight('Unable to generate insights at this time.');
+                }
 
             } catch (error) {
                 console.error("Failed to fetch transactions", error);
@@ -79,7 +117,7 @@ const Dashboard: React.FC = () => {
                     <p className="text-zinc-500 mt-2 page-enter stagger-1">Welcome back. Here's your financial overview.</p>
                 </div>
                 <div className="page-enter stagger-2">
-                    <Button variant="primary">
+                    <Button variant="primary" onClick={() => navigate(AppRoute.ASSISTANT)}>
                         <Sparkles className="w-4 h-4 animate-spin-slow" />
                         Ask AI Assistant
                     </Button>
@@ -92,8 +130,9 @@ const Dashboard: React.FC = () => {
                     <Card className="flex flex-col gap-4 h-full">
                         <div className="flex justify-between items-start">
                             <div>
-                                <p className="text-sm font-medium text-zinc-500">Total Balance</p>
-                                <h3 className="text-3xl font-bold mt-2 tracking-tight">${totalBalance.toFixed(2)}</h3>
+                                <p className="text-sm font-medium text-zinc-500">Net This Month</p>
+                                <h3 className="text-3xl font-bold mt-2 tracking-tight">${netThisMonth.toFixed(2)}</h3>
+                                <p className="text-xs text-zinc-500 mt-1">Income ${monthlyIncome.toFixed(2)} • Expenses ${monthlyExpenses.toFixed(2)}</p>
                             </div>
                             <div className="p-3 bg-zinc-50 rounded-2xl">
                                 <Wallet className="w-6 h-6 text-zinc-900" />
@@ -125,16 +164,16 @@ const Dashboard: React.FC = () => {
 
                 {/* AI Insight Card */}
                 <div className="md:col-span-2 page-enter stagger-3">
-                    <Card className="bg-black text-white border-zinc-800 flex flex-col justify-center relative overflow-hidden h-full group" noHover>
-                        <div className="absolute top-0 right-0 p-4 opacity-20 group-hover:opacity-30 transition-opacity duration-1000 animate-float">
+                    <Card className="bg-white text-zinc-900 border-zinc-200 flex flex-col justify-center relative overflow-hidden h-full group" noHover>
+                        <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-15 transition-opacity duration-1000 animate-float">
                             <Sparkles size={120} />
                         </div>
                         <div className="relative z-10">
-                            <div className="flex items-center gap-2 mb-3 text-zinc-400">
-                                <Sparkles size={16} className="text-amber-300" />
-                                <span className="text-xs font-bold uppercase tracking-widest text-amber-300/80">AI Insight</span>
+                            <div className="flex items-center gap-2 mb-3 text-zinc-500">
+                                <Sparkles size={16} className="text-amber-600" />
+                                <span className="text-xs font-bold uppercase tracking-widest text-amber-600/80">AI Insight</span>
                             </div>
-                            <p className="text-xl font-medium leading-relaxed text-zinc-100">
+                            <p className="text-xl font-medium leading-relaxed text-zinc-900">
                                 "{insight}"
                             </p>
                         </div>

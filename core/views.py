@@ -8,8 +8,8 @@ from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.models import User
 from django.views.decorators.csrf import ensure_csrf_cookie, csrf_exempt
 from django.utils.decorators import method_decorator
-from .models import Transaction
-from .serializers import TransactionSerializer, UserSerializer
+from .models import Transaction, IncomeSource, AssistantConversation, AssistantMessage
+from .serializers import TransactionSerializer, UserSerializer, IncomeSourceSerializer
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
@@ -24,6 +24,17 @@ class TransactionViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return Transaction.objects.filter(owner=self.request.user).order_by('-date', '-id')
+
+    def perform_create(self, serializer):
+        serializer.save(owner=self.request.user)
+
+
+class IncomeSourceViewSet(viewsets.ModelViewSet):
+    serializer_class = IncomeSourceSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return IncomeSource.objects.filter(owner=self.request.user).order_by('-id')
 
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
@@ -96,6 +107,167 @@ def login_view(request):
 def logout_view(request):
     logout(request)
     return Response({'message': 'Logged out successfully'})
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def forecast_insights(request):
+    """Return a short AI insight for spending trend data using local Ollama."""
+    from .ai_service import _env_flag, _ollama_chat_json
+    import json
+
+    spending_data = request.data.get('spendingData')
+    if spending_data is None:
+        return Response({'error': 'spendingData is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if not _env_flag("LEDGER_AI_USE_OLLAMA", default=False):
+        return Response(
+            {
+                'insight': 'Local AI is disabled. Set LEDGER_AI_USE_OLLAMA=true to enable insights.',
+                'ollama_used': False,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    system = (
+        "You are a personal finance assistant. "
+        "Given daily expense totals for the current month, write ONE short insight in <= 2 sentences. "
+        "Be specific but avoid assumptions about income. "
+        "Return ONLY strict JSON with key: insight (string)."
+    )
+    user = {
+        "spending_trend": spending_data,
+        "output_schema": {"insight": "string"},
+    }
+
+    result = _ollama_chat_json(
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
+        ]
+    )
+
+    if not isinstance(result, dict) or not isinstance(result.get('insight'), str) or not result.get('insight').strip():
+        return Response(
+            {
+                'insight': 'Unable to generate insights at this time.',
+                'ollama_used': True,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    return Response(
+        {
+            'insight': result['insight'].strip(),
+            'ollama_used': True,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+def _get_default_conversation(user: User) -> AssistantConversation:
+    convo = AssistantConversation.objects.filter(owner=user).order_by('-updated_at', '-id').first()
+    if convo:
+        return convo
+    return AssistantConversation.objects.create(owner=user, title="")
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def assistant_history(request):
+    convo = _get_default_conversation(request.user)
+    messages = convo.messages.all().order_by('created_at', 'id')
+    return Response(
+        {
+            'conversation_id': convo.id,
+            'messages': [
+                {
+                    'id': m.id,
+                    'role': m.role,
+                    'content': m.content,
+                    'created_at': m.created_at,
+                }
+                for m in messages
+            ],
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def assistant_send(request):
+    """Send a message to the assistant, store history, and return assistant reply."""
+    from .ai_service import _env_flag, _ollama_chat_json
+    import json
+
+    text = request.data.get('message')
+    if not isinstance(text, str) or not text.strip():
+        return Response({'error': 'message is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    text = text.strip()
+    if len(text) > 3000:
+        return Response({'error': 'message is too long (max 3000 chars)'}, status=status.HTTP_400_BAD_REQUEST)
+
+    convo = _get_default_conversation(request.user)
+
+    # Store user message first
+    AssistantMessage.objects.create(conversation=convo, role=AssistantMessage.ROLE_USER, content=text)
+
+    if not _env_flag("LEDGER_AI_USE_OLLAMA", default=False):
+        AssistantMessage.objects.create(
+            conversation=convo,
+            role=AssistantMessage.ROLE_ASSISTANT,
+            content="Local AI is disabled. Set LEDGER_AI_USE_OLLAMA=true to enable the assistant.",
+        )
+        convo.save(update_fields=['updated_at'])
+        return Response(
+            {
+                'reply': 'Local AI is disabled. Set LEDGER_AI_USE_OLLAMA=true to enable the assistant.',
+                'ollama_used': False,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    # Build context from last N messages
+    history = list(convo.messages.all().order_by('-created_at', '-id')[:20])
+    history.reverse()
+    chat_messages = [
+        {
+            'role': 'system',
+            'content': (
+                'You are Ledger AI Assistant. Help the user understand their finances and app usage. '
+                'Be concise and practical. If you are unsure, ask a clarifying question. '
+                'Return ONLY strict JSON: {"reply": "..."}.'
+            ),
+        }
+    ]
+
+    for m in history:
+        # Only forward user/assistant roles to Ollama.
+        if m.role == AssistantMessage.ROLE_USER:
+            chat_messages.append({'role': 'user', 'content': m.content})
+        elif m.role == AssistantMessage.ROLE_ASSISTANT:
+            chat_messages.append({'role': 'assistant', 'content': m.content})
+
+    result = _ollama_chat_json(chat_messages)
+    reply = None
+    if isinstance(result, dict) and isinstance(result.get('reply'), str):
+        reply = result.get('reply').strip()
+
+    if not reply:
+        reply = 'Sorry — I could not generate a reply right now.'
+
+    AssistantMessage.objects.create(conversation=convo, role=AssistantMessage.ROLE_ASSISTANT, content=reply)
+    convo.save(update_fields=['updated_at'])
+
+    return Response(
+        {
+            'reply': reply,
+            'ollama_used': True,
+        },
+        status=status.HTTP_200_OK,
+    )
 
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -273,7 +445,9 @@ class CategoryStatsView(APIView):
         from decimal import Decimal
         
         # Get transactions grouped by category
-        stats = Transaction.objects.filter(owner=request.user).values('category').annotate(
+        stats = Transaction.objects.filter(owner=request.user).exclude(
+            category__iexact='Income'
+        ).values('category').annotate(
             total=Sum('amount'),
             count=Count('id')
         ).order_by('-total')
