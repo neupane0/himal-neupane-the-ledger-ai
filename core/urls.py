@@ -5,6 +5,7 @@ from django.views.decorators.http import require_http_methods
 from django.http import JsonResponse
 from .views import (
     TransactionViewSet,
+    IncomeSourceViewSet,
     register,
     login_view,
     logout_view,
@@ -17,11 +18,15 @@ from .views import (
     BulkCategorizeView,
     categorize_with_ai,
     parse_voice_input,
+    forecast_insights,
+    assistant_history,
+    assistant_send,
     debug_ocr_text
 )
 
 router = routers.DefaultRouter()
 router.register(r'transactions', TransactionViewSet, basename='transaction')
+router.register(r'income-sources', IncomeSourceViewSet, basename='income-source')
 
 @require_http_methods(['GET'])
 @ensure_csrf_cookie
@@ -44,5 +49,8 @@ urlpatterns = [
     path('transactions/bulk-categorize/', BulkCategorizeView.as_view(), name='bulk_categorize'),
     path('ai/categorize/', categorize_with_ai, name='categorize_ai'),
     path('ai/parse-voice/', parse_voice_input, name='parse_voice'),
+    path('ai/forecast-insights/', forecast_insights, name='forecast_insights'),
+    path('ai/assistant/history/', assistant_history, name='assistant_history'),
+    path('ai/assistant/send/', assistant_send, name='assistant_send'),
     path('debug/ocr/', debug_ocr_text, name='debug_ocr'),  # Debug endpoint
 ] + router.urls

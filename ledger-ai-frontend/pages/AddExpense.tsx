@@ -5,22 +5,24 @@ import { categorizeTransaction, parseVoiceLog } from '../services/aiService';
 import { Transaction } from '../types';
 import { TRANSACTION_CATEGORIES } from '../constants/categories';
 
-import { transactions } from '../services/api';
+import { receipts, transactions } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { AppRoute } from '../types';
-
-// Helper to get CSRF token from cookie
-const getCsrfToken = (): string => {
-    const value = `; ${document.cookie}`;
-    const parts = value.split(`; csrftoken=`);
-    if (parts.length === 2) return parts.pop()?.split(';').shift() || '';
-    return '';
-};
 
 const AddExpense: React.FC = () => {
     const navigate = useNavigate();
     const [activeTab, setActiveTab] = useState<'manual' | 'receipt' | 'voice'>('manual');
     const [isLoading, setIsLoading] = useState(false);
+    const [receiptAiDebug, setReceiptAiDebug] = useState<{
+        ollamaUsed: boolean;
+        dateConfidence?: number | null;
+        dateReason?: string | null;
+    } | null>(null);
+    const [voiceAiDebug, setVoiceAiDebug] = useState<{
+        ollamaUsed: boolean;
+        dateConfidence?: number | null;
+        dateReason?: string | null;
+    } | null>(null);
     const [form, setForm] = useState<Partial<Transaction>>({
         title: '',
         amount: 0,
@@ -106,6 +108,17 @@ const AddExpense: React.FC = () => {
                 try {
                     const parsed = await parseVoiceLog(finalTranscript);
                     if (parsed) {
+                        // Store optional AI debug info (only present when backend debug is enabled)
+                        if (typeof parsed.ollama_used === 'boolean' || typeof parsed.ollama_date_reason === 'string') {
+                            setVoiceAiDebug({
+                                ollamaUsed: Boolean(parsed.ollama_used),
+                                dateConfidence: (typeof parsed.ollama_date_confidence === 'number') ? parsed.ollama_date_confidence : null,
+                                dateReason: (typeof parsed.ollama_date_reason === 'string') ? parsed.ollama_date_reason : null,
+                            });
+                        } else {
+                            setVoiceAiDebug(null);
+                        }
+
                         setForm(prev => ({
                             ...prev,
                             title: parsed.description || finalTranscript,
@@ -150,26 +163,25 @@ const AddExpense: React.FC = () => {
             setReceiptImage(base64);
             setIsLoading(true);
             try {
-                // Use the receipts API service (handles CSRF automatically)
                 const formData = new FormData();
                 formData.append('file', file);
 
-                const response = await fetch('http://localhost:8000/api/upload-receipt/', {
-                    method: 'POST',
-                    body: formData,
-                    credentials: 'include',
-                    headers: {
-                        'X-CSRFToken': getCsrfToken(),
-                    }
-                });
-
-                if (!response.ok) {
-                    throw new Error(`Upload failed: ${response.statusText}`);
-                }
-
-                const data = await response.json();
+                // Use shared API client (baseURL + credentials)
+                const response = await receipts.upload(formData);
+                const data = response.data;
 
                 if (data) {
+                    // Store optional AI debug info (only present when backend debug is enabled)
+                    if (typeof data.ollama_used === 'boolean' || typeof data.ollama_date_reason === 'string') {
+                        setReceiptAiDebug({
+                            ollamaUsed: Boolean(data.ollama_used),
+                            dateConfidence: (typeof data.ollama_date_confidence === 'number') ? data.ollama_date_confidence : null,
+                            dateReason: (typeof data.ollama_date_reason === 'string') ? data.ollama_date_reason : null,
+                        });
+                    } else {
+                        setReceiptAiDebug(null);
+                    }
+
                     // DEBUG: Log what we received from backend
                     console.log('🔍 Receipt data from backend:', data);
                     console.log('📅 Date value received:', data.date);
@@ -379,14 +391,26 @@ const AddExpense: React.FC = () => {
                                 onChange={handleInputChange}
                                 required
                             />
-                            <Input
-                                label="Date"
-                                type="date"
-                                name="date"
-                                value={form.date}
-                                onChange={handleInputChange}
-                                required
-                            />
+                            <div>
+                                <Input
+                                    label="Date"
+                                    type="date"
+                                    name="date"
+                                    value={form.date}
+                                    onChange={handleInputChange}
+                                    required
+                                />
+                                {receiptAiDebug?.dateReason && activeTab === 'receipt' && (
+                                    <p className="mt-1 text-xs text-zinc-500">
+                                        {receiptAiDebug.ollamaUsed ? 'Ollama:' : 'AI:'} {receiptAiDebug.dateReason}
+                                    </p>
+                                )}
+                                {voiceAiDebug?.dateReason && activeTab === 'voice' && (
+                                    <p className="mt-1 text-xs text-zinc-500">
+                                        {voiceAiDebug.ollamaUsed ? 'Ollama:' : 'AI:'} {voiceAiDebug.dateReason}
+                                    </p>
+                                )}
+                            </div>
                         </div>
 
                         <div className="relative">

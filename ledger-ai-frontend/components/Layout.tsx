@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { AppRoute } from '../types';
 import CursorTracker from './CursorTracker';
+import { auth } from '../services/api';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -97,7 +98,15 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
           <div className="p-4 border-t border-zinc-100 relative z-50">
             <button
-              onClick={() => navigate(AppRoute.LANDING)}
+              onClick={async () => {
+                try {
+                  await auth.logout();
+                } catch (e) {
+                  // Even if logout fails, still navigate away.
+                  console.error('Logout failed', e);
+                }
+                navigate(AppRoute.LANDING);
+              }}
               className="flex items-center gap-3 px-4 py-3 w-full rounded-xl text-zinc-500 hover:bg-red-50 hover:text-red-600 transition-all duration-300 hover:translate-x-1"
             >
               <LogOut size={20} className="stroke-[1.5]" />

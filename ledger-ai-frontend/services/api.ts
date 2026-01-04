@@ -25,8 +25,17 @@ getCsrfToken();
 
 // Add a request interceptor to ensure CSRF token is present if needed
 api.interceptors.request.use(async (config) => {
-    if (!config.headers['X-CSRFToken']) {
-        // Optionally retry fetching CSRF token here if it's missing
+    // Ensure CSRF token is sent for unsafe methods.
+    const method = (config.method || 'get').toLowerCase();
+    const needsCsrf = !['get', 'head', 'options', 'trace'].includes(method);
+
+    if (needsCsrf && !config.headers['X-CSRFToken']) {
+        const value = `; ${document.cookie}`;
+        const parts = value.split(`; csrftoken=`);
+        const token = (parts.length === 2 ? parts.pop()?.split(';').shift() : '') || '';
+        if (token) {
+            config.headers['X-CSRFToken'] = token;
+        }
     }
     return config;
 }, (error) => {
@@ -65,4 +74,17 @@ export const receipts = {
             'Content-Type': 'multipart/form-data',
         },
     }),
+};
+
+export const incomeSources = {
+    getAll: () => api.get('/income-sources/'),
+    create: (data: { name: string; monthly_amount: number; active?: boolean }) => api.post('/income-sources/', data),
+    update: (id: number, data: Partial<{ name: string; monthly_amount: number; active: boolean }>) => api.put(`/income-sources/${id}/`, data),
+    delete: (id: number) => api.delete(`/income-sources/${id}/`),
+};
+
+export const ai = {
+    forecastInsights: (spendingData: any) => api.post('/ai/forecast-insights/', { spendingData }),
+    assistantHistory: () => api.get('/ai/assistant/history/'),
+    assistantSend: (message: string) => api.post('/ai/assistant/send/', { message }),
 };
