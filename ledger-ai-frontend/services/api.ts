@@ -54,6 +54,19 @@ api.interceptors.request.use(async (config) => {
             config.headers = headers;
         }
     }
+
+    // If sending FormData, do not force Content-Type to application/json.
+    // Let the browser/axios set multipart boundaries.
+    if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const headers: any = config.headers ?? {};
+        if (typeof headers.delete === 'function') {
+            headers.delete('Content-Type');
+        } else {
+            delete headers['Content-Type'];
+        }
+        config.headers = headers;
+    }
     return config;
 }, (error) => {
     return Promise.reject(error);
