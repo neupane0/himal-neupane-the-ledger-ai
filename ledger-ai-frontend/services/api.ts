@@ -1,6 +1,10 @@
 import axios from 'axios';
 
-const API_URL = 'http://localhost:8000/api';
+// Use the same hostname as the frontend to keep cookies same-site.
+// This prevents "random" 403/unauthorized behavior when opening the frontend on
+// 127.0.0.1 but calling the backend on localhost (or vice versa).
+const API_HOST = (typeof window !== 'undefined' && window.location?.hostname) ? window.location.hostname : 'localhost';
+const API_URL = `http://${API_HOST}:8000/api`;
 
 const api = axios.create({
     baseURL: API_URL,
@@ -9,6 +13,13 @@ const api = axios.create({
         'Content-Type': 'application/json',
     },
 });
+
+const readCookie = (name: string): string => {
+    if (typeof document === 'undefined') return '';
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; ${name}=`);
+    return (parts.length === 2 ? parts.pop()?.split(';').shift() : '') || '';
+};
 
 // CSRF Token handling for Django
 const getCsrfToken = async () => {
@@ -29,12 +40,18 @@ api.interceptors.request.use(async (config) => {
     const method = (config.method || 'get').toLowerCase();
     const needsCsrf = !['get', 'head', 'options', 'trace'].includes(method);
 
-    if (needsCsrf && !config.headers['X-CSRFToken']) {
-        const value = `; ${document.cookie}`;
-        const parts = value.split(`; csrftoken=`);
-        const token = (parts.length === 2 ? parts.pop()?.split(';').shift() : '') || '';
+    if (needsCsrf) {
+        const token = readCookie('csrftoken');
         if (token) {
-            config.headers['X-CSRFToken'] = token;
+            // Axios v1 uses AxiosHeaders in many cases; support both shapes.
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const headers: any = config.headers ?? {};
+            if (typeof headers.set === 'function') {
+                headers.set('X-CSRFToken', token);
+            } else {
+                headers['X-CSRFToken'] = token;
+            }
+            config.headers = headers;
         }
     }
     return config;
@@ -55,24 +72,21 @@ export const auth = {
 export const transactions = {
     getAll: () => api.get('/transactions/'),
     create: (data: any) => {
-        const config = data instanceof FormData ? { headers: { 'Content-Type': 'multipart/form-data' } } : {};
+        // Let Axios set the multipart boundary automatically for FormData.
+        const config = data instanceof FormData ? {} : {};
         return api.post('/transactions/', data, config);
     },
     update: (id: number, data: any) => api.put(`/transactions/${id}/`, data),
     delete: (id: number) => api.delete(`/transactions/${id}/`),
     export: () => api.get('/transactions/export/', { responseType: 'blob' }),
     import: (formData: FormData) => api.post('/transactions/import/', formData, {
-        headers: {
-            'Content-Type': 'multipart/form-data',
-        },
+        // Let Axios set the multipart boundary automatically.
     }),
 };
 
 export const receipts = {
     upload: (formData: FormData) => api.post('/upload-receipt/', formData, {
-        headers: {
-            'Content-Type': 'multipart/form-data',
-        },
+        // Let Axios set the multipart boundary automatically.
     }),
 };
 
