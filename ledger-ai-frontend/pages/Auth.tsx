@@ -34,9 +34,9 @@ export const Login: React.FC = () => {
                 {error && <div className="text-red-500 text-sm text-center mb-4">{error}</div>}
                 <form className="space-y-4" onSubmit={handleLogin}>
                     <Input
-                        label="Username"
+                        label="Username or email"
                         type="text"
-                        placeholder="johndoe"
+                        placeholder="johndoe or name@example.com"
                         value={username}
                         onChange={(e) => setUsername(e.target.value)}
                     />

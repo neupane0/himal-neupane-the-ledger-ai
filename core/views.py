@@ -77,14 +77,20 @@ def register(request):
 @permission_classes([permissions.AllowAny])
 @ensure_csrf_cookie
 def login_view(request):
-    username = request.data.get('username')
+    identifier = request.data.get('username') or request.data.get('email') or request.data.get('identifier')
     password = request.data.get('password')
     
-    if not username or not password:
+    if not identifier or not password:
         return Response(
             {'error': 'Username and password are required'},
             status=status.HTTP_400_BAD_REQUEST
         )
+
+    username = identifier
+    if isinstance(identifier, str) and '@' in identifier:
+        matched_user = User.objects.filter(email__iexact=identifier).only('username').first()
+        if matched_user is not None:
+            username = matched_user.username
     
     user = authenticate(request, username=username, password=password)
     
