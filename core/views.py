@@ -2,14 +2,14 @@
 from django.db import models
 import csv
 from django.http import HttpResponse
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.response import Response
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.models import User
 from django.views.decorators.csrf import ensure_csrf_cookie, csrf_exempt
 from django.utils.decorators import method_decorator
-from .models import Transaction, IncomeSource, AssistantConversation, AssistantMessage
-from .serializers import TransactionSerializer, UserSerializer, IncomeSourceSerializer
+from .models import Transaction, IncomeSource, AssistantConversation, AssistantMessage, Budget, Reminder
+from .serializers import TransactionSerializer, UserSerializer, IncomeSourceSerializer, BudgetSerializer, ReminderSerializer
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
@@ -38,6 +38,87 @@ class IncomeSourceViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
+
+
+class BudgetViewSet(viewsets.ModelViewSet):
+    serializer_class = BudgetSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        from datetime import date
+        queryset = Budget.objects.filter(owner=self.request.user)
+        
+        # Filter by month if provided (format: YYYY-MM-DD)
+        month_param = self.request.query_params.get('month')
+        if month_param:
+            try:
+                month_date = date.fromisoformat(month_param)
+                queryset = queryset.filter(month=month_date.replace(day=1))
+            except ValueError:
+                pass
+        
+        return queryset.order_by('-month', 'category')
+
+    def perform_create(self, serializer):
+        # Ensure month is set to first day of month
+        month = serializer.validated_data.get('month')
+        if month:
+            serializer.validated_data['month'] = month.replace(day=1)
+        serializer.save(owner=self.request.user)
+
+
+class ReminderViewSet(viewsets.ModelViewSet):
+    serializer_class = ReminderSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = Reminder.objects.filter(owner=self.request.user)
+        
+        # Filter by status if provided
+        status_filter = self.request.query_params.get('status')
+        if status_filter == 'pending':
+            queryset = queryset.filter(is_paid=False)
+        elif status_filter == 'paid':
+            queryset = queryset.filter(is_paid=True)
+        elif status_filter == 'overdue':
+            from datetime import date
+            queryset = queryset.filter(is_paid=False, due_date__lt=date.today())
+        
+        return queryset.order_by('due_date', '-id')
+
+    def perform_create(self, serializer):
+        serializer.save(owner=self.request.user)
+    
+    @action(detail=True, methods=['post'])
+    def toggle_paid(self, request, pk=None):
+        """Toggle the paid status of a reminder"""
+        reminder = self.get_object()
+        reminder.is_paid = not reminder.is_paid
+        reminder.save()
+        return Response(ReminderSerializer(reminder).data)
+    
+    @action(detail=False, methods=['post'])
+    def send_test_email(self, request):
+        """Send a test reminder email to the user"""
+        from .email_service import send_reminder_email
+        
+        user = request.user
+        success = send_reminder_email(
+            to_email=user.email,
+            reminder_title="Test Reminder",
+            amount=100.00,
+            due_date="Tomorrow",
+            is_test=True
+        )
+        
+        if success:
+            return Response({'message': 'Test email sent successfully!'})
+        else:
+            return Response(
+                {'error': 'Failed to send email. Check email configuration.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
 
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
@@ -169,6 +250,240 @@ def forecast_insights(request):
         },
         status=status.HTTP_200_OK,
     )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def financial_forecast(request):
+    """
+    Generate financial forecast using ML algorithms.
+    Uses linear regression for trend prediction and provides category-wise analysis.
+    """
+    from datetime import date, timedelta
+    from dateutil.relativedelta import relativedelta
+    from collections import defaultdict
+    import statistics
+    
+    user = request.user
+    transactions = Transaction.objects.filter(owner=user).order_by('date')
+    income_sources = IncomeSource.objects.filter(owner=user, active=True)
+    
+    if not transactions.exists():
+        return Response({
+            'monthly_data': [],
+            'predictions': [],
+            'category_breakdown': [],
+            'insights': {
+                'total_predicted_spending': 0,
+                'predicted_savings': 0,
+                'trend': 'neutral',
+                'trend_percentage': 0,
+                'top_growing_category': None,
+                'recommendation': 'Start tracking your expenses to get personalized predictions.'
+            }
+        })
+    
+    # Get date range
+    today = date.today()
+    first_transaction_date = transactions.first().date
+    
+    # Aggregate spending by month
+    monthly_spending = defaultdict(lambda: {'total': 0, 'categories': defaultdict(float)})
+    
+    for txn in transactions:
+        # All transactions are expenses (no transaction_type field)
+        # Skip if category is 'Income' (treat as not an expense)
+        if txn.category and txn.category.lower() == 'income':
+            continue
+        month_key = txn.date.strftime('%Y-%m')
+        amount = float(txn.amount)
+        monthly_spending[month_key]['total'] += amount
+        monthly_spending[month_key]['categories'][txn.category or 'Uncategorized'] += amount
+    
+    # Build historical data array for regression
+    sorted_months = sorted(monthly_spending.keys())
+    
+    if len(sorted_months) < 2:
+        # Not enough data for prediction
+        current_month = today.strftime('%Y-%m')
+        current_spending = monthly_spending.get(current_month, {'total': 0})['total']
+        return Response({
+            'monthly_data': [{
+                'month': current_month,
+                'actual': current_spending,
+                'predicted': None,
+                'label': today.strftime('%b %Y')
+            }],
+            'predictions': [],
+            'category_breakdown': [],
+            'insights': {
+                'total_predicted_spending': current_spending,
+                'predicted_savings': 0,
+                'trend': 'neutral',
+                'trend_percentage': 0,
+                'top_growing_category': None,
+                'recommendation': 'Keep tracking your expenses for at least 2 months to get accurate predictions.'
+            }
+        })
+    
+    # Linear regression for overall trend
+    def linear_regression(x_vals, y_vals):
+        n = len(x_vals)
+        if n < 2:
+            return 0, y_vals[0] if y_vals else 0
+        
+        mean_x = sum(x_vals) / n
+        mean_y = sum(y_vals) / n
+        
+        numerator = sum((x_vals[i] - mean_x) * (y_vals[i] - mean_y) for i in range(n))
+        denominator = sum((x_vals[i] - mean_x) ** 2 for i in range(n))
+        
+        if denominator == 0:
+            return 0, mean_y
+        
+        slope = numerator / denominator
+        intercept = mean_y - slope * mean_x
+        
+        return slope, intercept
+    
+    # Prepare data for regression
+    x_values = list(range(len(sorted_months)))
+    y_values = [monthly_spending[m]['total'] for m in sorted_months]
+    
+    slope, intercept = linear_regression(x_values, y_values)
+    
+    # Build monthly data with actuals
+    monthly_data = []
+    for i, month_key in enumerate(sorted_months):
+        month_date = date.fromisoformat(f"{month_key}-01")
+        monthly_data.append({
+            'month': month_key,
+            'actual': round(monthly_spending[month_key]['total'], 2),
+            'predicted': round(slope * i + intercept, 2),
+            'label': month_date.strftime('%b %Y')
+        })
+    
+    # Generate predictions for next 6 months
+    predictions = []
+    last_index = len(sorted_months) - 1
+    
+    # Apply seasonality adjustment based on historical patterns
+    monthly_averages = defaultdict(list)
+    for month_key in sorted_months:
+        month_num = int(month_key.split('-')[1])
+        monthly_averages[month_num].append(monthly_spending[month_key]['total'])
+    
+    overall_avg = sum(y_values) / len(y_values) if y_values else 0
+    seasonality = {}
+    for month_num, values in monthly_averages.items():
+        avg = sum(values) / len(values)
+        seasonality[month_num] = avg / overall_avg if overall_avg > 0 else 1.0
+    
+    for i in range(1, 7):  # Next 6 months
+        future_index = last_index + i
+        future_date = today + relativedelta(months=i)
+        month_num = future_date.month
+        
+        # Base prediction from linear regression
+        base_prediction = slope * future_index + intercept
+        
+        # Apply seasonality if we have data for that month
+        seasonal_factor = seasonality.get(month_num, 1.0)
+        adjusted_prediction = max(0, base_prediction * seasonal_factor)
+        
+        predictions.append({
+            'month': future_date.strftime('%Y-%m'),
+            'actual': None,
+            'predicted': round(adjusted_prediction, 2),
+            'label': future_date.strftime('%b %Y')
+        })
+    
+    # Category breakdown with predictions
+    category_totals = defaultdict(list)
+    for month_key in sorted_months:
+        for category, amount in monthly_spending[month_key]['categories'].items():
+            category_totals[category].append(amount)
+    
+    category_breakdown = []
+    category_trends = {}
+    
+    for category, values in category_totals.items():
+        avg_spending = sum(values) / len(values)
+        
+        # Calculate trend for this category
+        if len(values) >= 2:
+            cat_x = list(range(len(values)))
+            cat_slope, _ = linear_regression(cat_x, values)
+            trend_pct = (cat_slope / avg_spending * 100) if avg_spending > 0 else 0
+        else:
+            trend_pct = 0
+        
+        category_trends[category] = trend_pct
+        
+        # Predict next month for this category
+        next_month_prediction = avg_spending * (1 + trend_pct / 100) if trend_pct else avg_spending
+        
+        category_breakdown.append({
+            'category': category,
+            'average_monthly': round(avg_spending, 2),
+            'last_month': round(values[-1], 2) if values else 0,
+            'predicted_next': round(max(0, next_month_prediction), 2),
+            'trend': 'up' if trend_pct > 5 else ('down' if trend_pct < -5 else 'stable'),
+            'trend_percentage': round(trend_pct, 1)
+        })
+    
+    # Sort by average spending
+    category_breakdown.sort(key=lambda x: x['average_monthly'], reverse=True)
+    
+    # Calculate insights
+    total_predicted_6mo = sum(p['predicted'] for p in predictions)
+    avg_predicted_monthly = total_predicted_6mo / 6 if predictions else 0
+    
+    # Monthly income from income sources
+    monthly_income = sum(float(src.monthly_amount) for src in income_sources)
+    predicted_monthly_savings = monthly_income - avg_predicted_monthly if monthly_income > 0 else 0
+    
+    # Determine trend
+    if len(y_values) >= 2:
+        recent_avg = sum(y_values[-3:]) / min(3, len(y_values))
+        older_avg = sum(y_values[:-3]) / max(1, len(y_values) - 3) if len(y_values) > 3 else y_values[0]
+        trend_pct = ((recent_avg - older_avg) / older_avg * 100) if older_avg > 0 else 0
+    else:
+        trend_pct = 0
+    
+    trend = 'up' if trend_pct > 5 else ('down' if trend_pct < -5 else 'stable')
+    
+    # Find fastest growing category
+    top_growing = max(category_trends.items(), key=lambda x: x[1]) if category_trends else (None, 0)
+    
+    # Generate recommendation
+    if trend == 'up' and trend_pct > 15:
+        recommendation = f"Your spending is increasing by {abs(trend_pct):.1f}% monthly. Consider reviewing your {category_breakdown[0]['category'] if category_breakdown else 'largest expense'} spending."
+    elif trend == 'down':
+        recommendation = f"Great job! Your spending is decreasing by {abs(trend_pct):.1f}%. Keep up the good financial habits."
+    elif predicted_monthly_savings < 0:
+        recommendation = f"You're projected to spend ${abs(predicted_monthly_savings):.0f} more than your income. Consider setting budgets for high-spending categories."
+    elif top_growing[1] > 20:
+        recommendation = f"Your {top_growing[0]} spending is growing rapidly ({top_growing[1]:.1f}%/month). Consider setting a budget limit."
+    else:
+        recommendation = "Your spending is stable. Consider automating savings transfers to build your emergency fund."
+    
+    return Response({
+        'monthly_data': monthly_data,
+        'predictions': predictions,
+        'category_breakdown': category_breakdown[:8],  # Top 8 categories
+        'insights': {
+            'total_predicted_spending': round(total_predicted_6mo, 2),
+            'avg_monthly_predicted': round(avg_predicted_monthly, 2),
+            'monthly_income': round(monthly_income, 2),
+            'predicted_savings': round(predicted_monthly_savings, 2),
+            'trend': trend,
+            'trend_percentage': round(trend_pct, 1),
+            'top_growing_category': top_growing[0] if top_growing[1] > 5 else None,
+            'top_growing_percentage': round(top_growing[1], 1) if top_growing[1] > 5 else 0,
+            'recommendation': recommendation
+        }
+    })
 
 
 def _get_default_conversation(user: User) -> AssistantConversation:

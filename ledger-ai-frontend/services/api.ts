@@ -110,8 +110,43 @@ export const incomeSources = {
     delete: (id: number) => api.delete(`/income-sources/${id}/`),
 };
 
+export const budgets = {
+    getAll: (month?: string) => api.get('/budgets/', { params: month ? { month } : {} }),
+    create: (data: { category: string; limit_amount: number; month: string }) => api.post('/budgets/', data),
+    update: (id: number, data: Partial<{ category: string; limit_amount: number; month: string }>) => api.put(`/budgets/${id}/`, data),
+    delete: (id: number) => api.delete(`/budgets/${id}/`),
+};
+
 export const ai = {
     forecastInsights: (spendingData: any) => api.post('/ai/forecast-insights/', { spendingData }),
+    forecast: () => api.get('/ai/forecast/'),
     assistantHistory: () => api.get('/ai/assistant/history/'),
     assistantSend: (message: string) => api.post('/ai/assistant/send/', { message }),
+};
+
+export const reminders = {
+    getAll: (status?: 'pending' | 'paid' | 'overdue') => 
+        api.get('/reminders/', { params: status ? { status } : {} }),
+    create: (data: {
+        title: string;
+        amount: number;
+        due_date: string;
+        frequency?: string;
+        email_reminder?: boolean;
+        reminder_days_before?: number;
+        notes?: string;
+    }) => api.post('/reminders/', data),
+    update: (id: number, data: Partial<{
+        title: string;
+        amount: number;
+        due_date: string;
+        frequency: string;
+        is_paid: boolean;
+        email_reminder: boolean;
+        reminder_days_before: number;
+        notes: string;
+    }>) => api.put(`/reminders/${id}/`, data),
+    delete: (id: number) => api.delete(`/reminders/${id}/`),
+    togglePaid: (id: number) => api.post(`/reminders/${id}/toggle_paid/`),
+    sendTestEmail: () => api.post('/reminders/send_test_email/'),
 };

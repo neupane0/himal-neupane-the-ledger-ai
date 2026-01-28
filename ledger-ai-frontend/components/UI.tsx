@@ -31,47 +31,14 @@ export const Button: React.FC<ButtonProps> = ({ children, variant = 'primary', c
   );
 };
 
-// --- 3D Tilt Card ---
-export const Card: React.FC<{ children: ReactNode; className?: string; title?: string; noHover?: boolean }> = ({ children, className = '', title, noHover = false }) => {
-    const cardRef = useRef<HTMLDivElement>(null);
-    const [transform, setTransform] = useState('');
-
-    const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-        if (noHover || !cardRef.current) return;
-        
-        const card = cardRef.current;
-        const rect = card.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
-        
-        const centerX = rect.width / 2;
-        const centerY = rect.height / 2;
-        
-        const rotateX = ((y - centerY) / centerY) * -5; // Max 5deg rotation
-        const rotateY = ((x - centerX) / centerX) * 5;
-
-        setTransform(`perspective(1000px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) scale3d(1.02, 1.02, 1.02)`);
-    };
-
-    const handleMouseLeave = () => {
-        setTransform('perspective(1000px) rotateX(0deg) rotateY(0deg) scale3d(1, 1, 1)');
-    };
-
+// --- Simple Card ---
+export const Card: React.FC<{ children: ReactNode; className?: string; title?: string; noHover?: boolean }> = ({ children, className = '', title }) => {
     return (
         <div 
-            ref={cardRef}
-            className={`
-                bg-white rounded-xl border border-zinc-200 p-6 
-                transition-all duration-300 ease-out
-                ${!noHover ? 'hover:shadow-2xl hover:shadow-zinc-200/50 hover:border-zinc-300' : ''} 
-                ${className}
-            `}
-            onMouseMove={handleMouseMove}
-            onMouseLeave={handleMouseLeave}
-            style={{ transform }}
+            className={`bg-white rounded-xl border border-zinc-200 p-6 ${className}`}
         >
             {title && <h3 className="text-lg font-bold text-zinc-900 mb-4">{title}</h3>}
-            <div className="transform-style-preserve-3d">
+            <div>
                 {children}
             </div>
         </div>

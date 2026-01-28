@@ -17,9 +17,10 @@ export interface IncomeSource {
 }
 
 export interface Budget {
-  id: string;
+  id: number;
   category: string;
-  limit: number;
+  limit_amount: number;
+  month: string;
   spent: number;
 }
 
@@ -44,11 +45,16 @@ export interface UserProfile {
 }
 
 export interface Reminder {
-  id: string;
+  id: number;
   title: string;
   amount: number;
-  dueDate: string;
-  paid: boolean;
+  due_date: string;
+  frequency: 'once' | 'weekly' | 'monthly' | 'yearly';
+  is_paid: boolean;
+  is_overdue: boolean;
+  email_reminder: boolean;
+  reminder_days_before: number;
+  notes: string;
 }
 
 export enum AppRoute {

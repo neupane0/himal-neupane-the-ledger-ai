@@ -116,28 +116,28 @@ const Transactions: React.FC = () => {
                 </div>
 
                 <div className="overflow-x-auto">
-                    <table className="w-full text-left text-sm">
+                    <table className="w-full text-left text-sm table-fixed">
                         <thead className="bg-zinc-50 text-zinc-500 font-medium">
                             <tr>
-                                <th className="px-4 py-3 rounded-l-lg">Title</th>
-                                <th className="px-4 py-3">Category</th>
-                                <th className="px-4 py-3">Date</th>
-                                <th className="px-4 py-3">Source</th>
-                                <th className="px-4 py-3 text-right">Amount</th>
-                                <th className="px-4 py-3 rounded-r-lg"></th>
+                                <th className="px-4 py-3 rounded-l-lg w-[30%]">Title</th>
+                                <th className="px-4 py-3 w-[15%]">Category</th>
+                                <th className="px-4 py-3 w-[15%]">Date</th>
+                                <th className="px-4 py-3 w-[12%]">Source</th>
+                                <th className="px-4 py-3 text-right w-[18%]">Amount</th>
+                                <th className="px-4 py-3 rounded-r-lg w-[10%]"></th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-zinc-100">
                             {filtered.map((tx) => (
-                                <tr key={tx.id} className="group hover:bg-zinc-50 transition-colors">
-                                    <td className="px-4 py-4 font-medium text-zinc-900">{tx.title}</td>
+                                <tr key={tx.id} className="group hover:bg-zinc-50/80">
+                                    <td className="px-4 py-4 font-medium text-zinc-900 truncate">{tx.title}</td>
                                     <td className="px-4 py-4">
-                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-zinc-100 text-zinc-800">
+                                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-zinc-100 text-zinc-800 truncate max-w-full">
                                             {tx.category}
                                         </span>
                                     </td>
                                     <td className="px-4 py-4 text-zinc-500">{new Date(tx.date).toLocaleDateString()}</td>
-                                    <td className="px-4 py-4 text-zinc-500 text-xs">{tx.source}</td>
+                                    <td className="px-4 py-4 text-zinc-500 text-xs truncate">{tx.source}</td>
                                     <td className={`px-4 py-4 text-right font-bold ${parseFloat(tx.amount.toString()) > 0 ? 'text-emerald-600' : 'text-zinc-900'}`}>
                                         {parseFloat(tx.amount.toString()) > 0 ? '+' : ''}{parseFloat(tx.amount.toString()).toFixed(2)}
                                     </td>

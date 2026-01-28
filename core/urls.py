@@ -6,6 +6,8 @@ from django.http import JsonResponse
 from .views import (
     TransactionViewSet,
     IncomeSourceViewSet,
+    BudgetViewSet,
+    ReminderViewSet,
     register,
     login_view,
     logout_view,
@@ -19,6 +21,7 @@ from .views import (
     categorize_with_ai,
     parse_voice_input,
     forecast_insights,
+    financial_forecast,
     assistant_history,
     assistant_send,
     debug_ocr_text
@@ -27,6 +30,8 @@ from .views import (
 router = routers.DefaultRouter()
 router.register(r'transactions', TransactionViewSet, basename='transaction')
 router.register(r'income-sources', IncomeSourceViewSet, basename='income-source')
+router.register(r'budgets', BudgetViewSet, basename='budget')
+router.register(r'reminders', ReminderViewSet, basename='reminder')
 
 @require_http_methods(['GET'])
 @ensure_csrf_cookie
@@ -50,6 +55,7 @@ urlpatterns = [
     path('ai/categorize/', categorize_with_ai, name='categorize_ai'),
     path('ai/parse-voice/', parse_voice_input, name='parse_voice'),
     path('ai/forecast-insights/', forecast_insights, name='forecast_insights'),
+    path('ai/forecast/', financial_forecast, name='financial_forecast'),
     path('ai/assistant/history/', assistant_history, name='assistant_history'),
     path('ai/assistant/send/', assistant_send, name='assistant_send'),
     path('debug/ocr/', debug_ocr_text, name='debug_ocr'),  # Debug endpoint
