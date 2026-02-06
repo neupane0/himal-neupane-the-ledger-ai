@@ -24,7 +24,8 @@ from .views import (
     financial_forecast,
     assistant_history,
     assistant_send,
-    debug_ocr_text
+    debug_ocr_text,
+    ai_budget_suggestions
 )
 
 router = routers.DefaultRouter()
@@ -59,4 +60,5 @@ urlpatterns = [
     path('ai/assistant/history/', assistant_history, name='assistant_history'),
     path('ai/assistant/send/', assistant_send, name='assistant_send'),
     path('debug/ocr/', debug_ocr_text, name='debug_ocr'),  # Debug endpoint
+    path('ai/budget-suggestions/', ai_budget_suggestions, name='ai_budget_suggestions'),
 ] + router.urls

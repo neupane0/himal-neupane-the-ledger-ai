@@ -115,6 +115,7 @@ export const budgets = {
     create: (data: { category: string; limit_amount: number; month: string }) => api.post('/budgets/', data),
     update: (id: number, data: Partial<{ category: string; limit_amount: number; month: string }>) => api.put(`/budgets/${id}/`, data),
     delete: (id: number) => api.delete(`/budgets/${id}/`),
+    getAISuggestions: (month?: string) => api.get('/ai/budget-suggestions/', { params: month ? { month } : {} }),
 };
 
 export const ai = {

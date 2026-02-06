@@ -919,3 +919,186 @@ def debug_ocr_text(request):
             'error': str(e),
             'traceback': traceback.format_exc()
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def ai_budget_suggestions(request):
+    """
+    AI-assisted budget suggestions based on spending history.
+    Analyzes past 3-6 months of transactions to recommend budget limits
+    per category using statistical analysis and trend detection.
+    """
+    from datetime import date, timedelta
+    from dateutil.relativedelta import relativedelta
+    from collections import defaultdict
+    import statistics as stats_module
+
+    user = request.user
+    today = date.today()
+
+    # Target month for suggestions (query param or current month)
+    target_param = request.query_params.get('month')
+    if target_param:
+        try:
+            target_month = date.fromisoformat(target_param).replace(day=1)
+        except ValueError:
+            target_month = today.replace(day=1)
+    else:
+        target_month = today.replace(day=1)
+
+    # Look back 6 months for spending history
+    lookback_start = target_month - relativedelta(months=6)
+
+    transactions = Transaction.objects.filter(
+        owner=user,
+        date__gte=lookback_start,
+        date__lt=target_month,
+    ).exclude(category__iexact='Income').order_by('date')
+
+    if not transactions.exists():
+        return Response({
+            'suggestions': [],
+            'summary': {
+                'total_suggested': 0,
+                'months_analyzed': 0,
+                'message': 'Not enough spending history to generate suggestions. Track expenses for at least 1 month.'
+            }
+        })
+
+    # Aggregate spending by category and month
+    category_monthly = defaultdict(lambda: defaultdict(float))
+    all_months = set()
+
+    for txn in transactions:
+        cat = txn.category or 'Other'
+        month_key = txn.date.strftime('%Y-%m')
+        category_monthly[cat][month_key] += float(txn.amount)
+        all_months.add(month_key)
+
+    sorted_months = sorted(all_months)
+    months_analyzed = len(sorted_months)
+
+    # Get existing budgets for target month to exclude them
+    existing_budgets = set(
+        Budget.objects.filter(owner=user, month=target_month)
+        .values_list('category', flat=True)
+    )
+
+    suggestions = []
+
+    for category, monthly_data in category_monthly.items():
+        # Skip if budget already exists for this category/month
+        if category in existing_budgets:
+            continue
+
+        monthly_amounts = [monthly_data.get(m, 0) for m in sorted_months]
+        # Only consider months with actual spending
+        nonzero_amounts = [a for a in monthly_amounts if a > 0]
+
+        if not nonzero_amounts:
+            continue
+
+        avg_spending = sum(nonzero_amounts) / len(nonzero_amounts)
+        max_spending = max(nonzero_amounts)
+        min_spending = min(nonzero_amounts)
+
+        # Trend detection using simple linear regression on nonzero months
+        trend = 'stable'
+        trend_pct = 0.0
+        if len(nonzero_amounts) >= 2:
+            x_vals = list(range(len(monthly_amounts)))
+            y_vals = monthly_amounts
+
+            # Simple linear regression
+            n = len(x_vals)
+            mean_x = sum(x_vals) / n
+            mean_y = sum(y_vals) / n
+            num = sum((x_vals[i] - mean_x) * (y_vals[i] - mean_y) for i in range(n))
+            den = sum((x_vals[i] - mean_x) ** 2 for i in range(n))
+            slope = num / den if den != 0 else 0
+
+            if avg_spending > 0:
+                trend_pct = (slope / avg_spending) * 100
+                if trend_pct > 10:
+                    trend = 'increasing'
+                elif trend_pct < -10:
+                    trend = 'decreasing'
+
+        # Calculate suggested limit with smart buffer
+        if trend == 'increasing':
+            # Growing category: use recent average + 15% buffer
+            recent = nonzero_amounts[-min(3, len(nonzero_amounts)):]
+            recent_avg = sum(recent) / len(recent)
+            suggested = recent_avg * 1.15
+            reasoning = f"Spending is trending up ({trend_pct:+.0f}%). Suggested limit is based on recent 3-month average (${recent_avg:.0f}) plus a 15% buffer."
+        elif trend == 'decreasing':
+            # Declining category: use average with smaller buffer
+            suggested = avg_spending * 1.05
+            reasoning = f"Spending is trending down ({trend_pct:+.0f}%). Suggested limit matches your average spending with a small 5% buffer to stay on track."
+        else:
+            # Stable: use average + 10% buffer
+            suggested = avg_spending * 1.10
+            reasoning = f"Spending is stable across months. Suggested limit is your average (${avg_spending:.0f}) plus a 10% buffer for flexibility."
+
+        # Round to nearest $5 for cleanliness
+        suggested = round(suggested / 5) * 5
+        suggested = max(suggested, 10)  # Minimum $10
+
+        # Volatility indicator
+        if len(nonzero_amounts) >= 2:
+            std_dev = stats_module.stdev(nonzero_amounts)
+            volatility = std_dev / avg_spending if avg_spending > 0 else 0
+            if volatility > 0.5:
+                confidence = 'low'
+                reasoning += " Note: spending in this category varies a lot month to month."
+            elif volatility > 0.25:
+                confidence = 'medium'
+            else:
+                confidence = 'high'
+        else:
+            confidence = 'low'
+            reasoning += " Limited data available (only 1 month)."
+
+        suggestions.append({
+            'category': category,
+            'suggested_limit': suggested,
+            'avg_spending': round(avg_spending, 2),
+            'max_spending': round(max_spending, 2),
+            'min_spending': round(min_spending, 2),
+            'trend': trend,
+            'trend_percentage': round(trend_pct, 1),
+            'confidence': confidence,
+            'reasoning': reasoning,
+            'months_with_data': len(nonzero_amounts),
+        })
+
+    # Sort by average spending descending (highest categories first)
+    suggestions.sort(key=lambda s: s['avg_spending'], reverse=True)
+
+    total_suggested = sum(s['suggested_limit'] for s in suggestions)
+
+    # Overall recommendation
+    income_sources = IncomeSource.objects.filter(owner=user, active=True)
+    total_income = sum(float(inc.monthly_amount) for inc in income_sources)
+
+    if total_income > 0:
+        budget_ratio = total_suggested / total_income
+        if budget_ratio > 0.9:
+            overall_msg = f"Your suggested budgets total ${total_suggested:.0f}, which is {budget_ratio*100:.0f}% of your monthly income (${total_income:.0f}). Consider reducing some limits to build savings."
+        elif budget_ratio > 0.7:
+            overall_msg = f"Your suggested budgets total ${total_suggested:.0f} ({budget_ratio*100:.0f}% of income). This leaves room for savings and unexpected expenses."
+        else:
+            overall_msg = f"Your suggested budgets total ${total_suggested:.0f} ({budget_ratio*100:.0f}% of income). Great — you have healthy headroom for savings!"
+    else:
+        overall_msg = f"Total suggested budget: ${total_suggested:.0f}. Add your income sources for better budget-to-income analysis."
+
+    return Response({
+        'suggestions': suggestions,
+        'summary': {
+            'total_suggested': total_suggested,
+            'months_analyzed': months_analyzed,
+            'total_income': total_income if total_income > 0 else None,
+            'message': overall_msg,
+        }
+    })

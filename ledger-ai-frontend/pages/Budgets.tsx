@@ -1,9 +1,32 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Button, Input } from '../components/UI';
-import { Edit2, Plus, Trash2, X, Check, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Edit2, Plus, Trash2, X, Check, AlertCircle, ChevronLeft, ChevronRight, Sparkles, TrendingUp, TrendingDown, Minus, ThumbsUp, ThumbsDown, Loader2 } from 'lucide-react';
 import { Budget } from '../types';
 import { budgets as budgetsApi } from '../services/api';
 import { TRANSACTION_CATEGORIES } from '../constants/categories';
+
+interface AISuggestion {
+    category: string;
+    suggested_limit: number;
+    avg_spending: number;
+    max_spending: number;
+    min_spending: number;
+    trend: 'increasing' | 'decreasing' | 'stable';
+    trend_percentage: number;
+    confidence: 'high' | 'medium' | 'low';
+    reasoning: string;
+    months_with_data: number;
+}
+
+interface AISuggestionResponse {
+    suggestions: AISuggestion[];
+    summary: {
+        total_suggested: number;
+        months_analyzed: number;
+        total_income: number | null;
+        message: string;
+    };
+}
 
 const Budgets: React.FC = () => {
     const [budgets, setBudgets] = useState<Budget[]>([]);
@@ -19,6 +42,13 @@ const Budgets: React.FC = () => {
     const [formCategory, setFormCategory] = useState('');
     const [formLimit, setFormLimit] = useState('');
     const [saving, setSaving] = useState(false);
+
+    // AI Suggestions state
+    const [showSuggestions, setShowSuggestions] = useState(false);
+    const [suggestions, setSuggestions] = useState<AISuggestion[]>([]);
+    const [suggestionSummary, setSuggestionSummary] = useState<AISuggestionResponse['summary'] | null>(null);
+    const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+    const [acceptingCategory, setAcceptingCategory] = useState<string | null>(null);
 
     const fetchBudgets = async () => {
         setLoading(true);
@@ -112,6 +142,61 @@ const Budgets: React.FC = () => {
         }
     };
 
+    const fetchSuggestions = async () => {
+        setLoadingSuggestions(true);
+        setShowSuggestions(true);
+        try {
+            const response = await budgetsApi.getAISuggestions(selectedMonth);
+            setSuggestions(response.data.suggestions);
+            setSuggestionSummary(response.data.summary);
+        } catch (error) {
+            console.error('Failed to fetch AI suggestions', error);
+        } finally {
+            setLoadingSuggestions(false);
+        }
+    };
+
+    const acceptSuggestion = async (suggestion: AISuggestion) => {
+        setAcceptingCategory(suggestion.category);
+        try {
+            await budgetsApi.create({
+                category: suggestion.category,
+                limit_amount: suggestion.suggested_limit,
+                month: selectedMonth,
+            });
+            setSuggestions(prev => prev.filter(s => s.category !== suggestion.category));
+            await fetchBudgets();
+        } catch (error) {
+            console.error('Failed to accept suggestion', error);
+            alert('Failed to create budget. It may already exist.');
+        } finally {
+            setAcceptingCategory(null);
+        }
+    };
+
+    const rejectSuggestion = (category: string) => {
+        setSuggestions(prev => prev.filter(s => s.category !== category));
+    };
+
+    const acceptAllSuggestions = async () => {
+        setAcceptingCategory('__all__');
+        try {
+            for (const suggestion of suggestions) {
+                await budgetsApi.create({
+                    category: suggestion.category,
+                    limit_amount: suggestion.suggested_limit,
+                    month: selectedMonth,
+                });
+            }
+            setSuggestions([]);
+            await fetchBudgets();
+        } catch (error) {
+            console.error('Failed to accept all suggestions', error);
+        } finally {
+            setAcceptingCategory(null);
+        }
+    };
+
     const totalBudget = budgets.reduce((acc, b) => acc + parseFloat(String(b.limit_amount)), 0);
     const totalSpent = budgets.reduce((acc, b) => acc + parseFloat(String(b.spent)), 0);
     const remaining = totalBudget - totalSpent;
@@ -129,10 +214,20 @@ const Budgets: React.FC = () => {
                     <h1 className="text-3xl font-bold text-zinc-900">Budgets</h1>
                     <p className="text-zinc-500 mt-1">Track your monthly spending limits.</p>
                 </div>
-                <Button variant="primary" onClick={openAddModal}>
-                    <Plus size={16} />
-                    New Budget
-                </Button>
+                <div className="flex gap-3">
+                    <Button
+                        variant="outline"
+                        onClick={fetchSuggestions}
+                        disabled={loadingSuggestions}
+                    >
+                        {loadingSuggestions ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
+                        AI Suggest
+                    </Button>
+                    <Button variant="primary" onClick={openAddModal}>
+                        <Plus size={16} />
+                        New Budget
+                    </Button>
+                </div>
             </div>
 
             {/* Month Selector */}
@@ -173,6 +268,169 @@ const Budgets: React.FC = () => {
                     </p>
                 </Card>
             </div>
+
+            {/* AI Budget Suggestions */}
+            {showSuggestions && (
+                <div className="space-y-4">
+                    <div className="flex justify-between items-center">
+                        <div className="flex items-center gap-2">
+                            <div className="w-8 h-8 rounded-full bg-violet-100 flex items-center justify-center">
+                                <Sparkles size={16} className="text-violet-600" />
+                            </div>
+                            <h2 className="text-xl font-bold text-zinc-900">AI Budget Suggestions</h2>
+                        </div>
+                        <button
+                            onClick={() => { setShowSuggestions(false); setSuggestions([]); }}
+                            className="p-2 hover:bg-zinc-100 rounded-lg text-zinc-400 hover:text-zinc-700"
+                        >
+                            <X size={18} />
+                        </button>
+                    </div>
+
+                    {loadingSuggestions ? (
+                        <Card className="p-8 text-center">
+                            <Loader2 size={24} className="animate-spin mx-auto mb-3 text-violet-600" />
+                            <p className="text-zinc-500">Analyzing your spending history...</p>
+                        </Card>
+                    ) : suggestions.length === 0 ? (
+                        <Card className="p-6 text-center border-violet-200 bg-violet-50/30">
+                            <p className="text-zinc-600">
+                                {suggestionSummary?.message || 'No new suggestions — all categories are already budgeted or there isn\'t enough data.'}
+                            </p>
+                        </Card>
+                    ) : (
+                        <>
+                            {/* Summary Banner */}
+                            {suggestionSummary && (
+                                <Card className="border-violet-200 bg-gradient-to-r from-violet-50 to-purple-50">
+                                    <p className="text-sm text-zinc-700">{suggestionSummary.message}</p>
+                                    <div className="flex items-center gap-4 mt-2 text-xs text-zinc-500">
+                                        <span>Based on {suggestionSummary.months_analyzed} month{suggestionSummary.months_analyzed !== 1 ? 's' : ''} of data</span>
+                                        <span>•</span>
+                                        <span>{suggestions.length} suggestion{suggestions.length !== 1 ? 's' : ''}</span>
+                                    </div>
+                                </Card>
+                            )}
+
+                            {/* Accept All / Reject All */}
+                            <div className="flex justify-end gap-2">
+                                <Button
+                                    variant="outline"
+                                    onClick={() => { setSuggestions([]); }}
+                                >
+                                    Dismiss All
+                                </Button>
+                                <Button
+                                    variant="primary"
+                                    onClick={acceptAllSuggestions}
+                                    disabled={acceptingCategory === '__all__'}
+                                    isLoading={acceptingCategory === '__all__'}
+                                >
+                                    <Check size={16} />
+                                    Accept All ({suggestions.length})
+                                </Button>
+                            </div>
+
+                            {/* Individual Suggestions */}
+                            <div className="grid grid-cols-1 gap-3">
+                                {suggestions.map((suggestion) => {
+                                    const TrendIcon = suggestion.trend === 'increasing' ? TrendingUp : suggestion.trend === 'decreasing' ? TrendingDown : Minus;
+                                    const trendColor = suggestion.trend === 'increasing' ? 'text-red-500' : suggestion.trend === 'decreasing' ? 'text-emerald-500' : 'text-zinc-400';
+                                    const confidenceColor = suggestion.confidence === 'high' ? 'bg-emerald-100 text-emerald-700' : suggestion.confidence === 'medium' ? 'bg-amber-100 text-amber-700' : 'bg-zinc-100 text-zinc-600';
+                                    const isAccepting = acceptingCategory === suggestion.category || acceptingCategory === '__all__';
+
+                                    return (
+                                        <Card key={suggestion.category} className="border-violet-100 hover:border-violet-300 transition-colors">
+                                            <div className="flex justify-between items-start">
+                                                <div className="flex items-center gap-3">
+                                                    <div className="w-10 h-10 rounded-full bg-violet-100 flex items-center justify-center font-bold text-violet-700">
+                                                        {suggestion.category[0]}
+                                                    </div>
+                                                    <div>
+                                                        <h3 className="font-bold text-zinc-900">{suggestion.category}</h3>
+                                                        <div className="flex items-center gap-2 mt-0.5">
+                                                            <TrendIcon size={14} className={trendColor} />
+                                                            <span className="text-xs text-zinc-500">
+                                                                Avg ${suggestion.avg_spending.toFixed(0)}/mo
+                                                            </span>
+                                                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${confidenceColor}`}>
+                                                                {suggestion.confidence} confidence
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <div className="text-right">
+                                                    <p className="text-2xl font-bold text-violet-700">${suggestion.suggested_limit}</p>
+                                                    <p className="text-[10px] text-zinc-400 mt-0.5">suggested limit</p>
+                                                </div>
+                                            </div>
+
+                                            {/* Spending range bar */}
+                                            <div className="mt-3 px-1">
+                                                <div className="flex justify-between text-[10px] text-zinc-400 mb-1">
+                                                    <span>Min ${suggestion.min_spending.toFixed(0)}</span>
+                                                    <span>Avg ${suggestion.avg_spending.toFixed(0)}</span>
+                                                    <span>Max ${suggestion.max_spending.toFixed(0)}</span>
+                                                </div>
+                                                <div className="relative w-full h-2 bg-zinc-100 rounded-full">
+                                                    {/* Range bar from min to max */}
+                                                    <div
+                                                        className="absolute top-0 h-full bg-violet-200 rounded-full"
+                                                        style={{
+                                                            left: `${suggestion.max_spending > 0 ? (suggestion.min_spending / suggestion.max_spending) * 80 : 0}%`,
+                                                            width: `${suggestion.max_spending > 0 ? ((suggestion.max_spending - suggestion.min_spending) / suggestion.max_spending) * 80 + 20 : 100}%`,
+                                                        }}
+                                                    />
+                                                    {/* Average marker */}
+                                                    <div
+                                                        className="absolute top-0 w-1 h-full bg-violet-600 rounded-full"
+                                                        style={{
+                                                            left: `${suggestion.max_spending > 0 ? (suggestion.avg_spending / (suggestion.max_spending * 1.2)) * 100 : 50}%`,
+                                                        }}
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            {/* Reasoning */}
+                                            <p className="mt-3 text-xs text-zinc-500 leading-relaxed">{suggestion.reasoning}</p>
+
+                                            {/* Data info */}
+                                            <p className="mt-1 text-[10px] text-zinc-400">
+                                                Based on {suggestion.months_with_data} month{suggestion.months_with_data !== 1 ? 's' : ''} of spending data
+                                            </p>
+
+                                            {/* Accept / Reject buttons */}
+                                            <div className="flex gap-2 mt-4">
+                                                <button
+                                                    onClick={() => rejectSuggestion(suggestion.category)}
+                                                    disabled={isAccepting}
+                                                    className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-zinc-200 text-zinc-600 hover:bg-red-50 hover:border-red-200 hover:text-red-600 text-sm font-medium transition-colors disabled:opacity-50"
+                                                >
+                                                    <ThumbsDown size={14} />
+                                                    Reject
+                                                </button>
+                                                <button
+                                                    onClick={() => acceptSuggestion(suggestion)}
+                                                    disabled={isAccepting}
+                                                    className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-violet-600 text-white hover:bg-violet-700 text-sm font-medium transition-colors disabled:opacity-50"
+                                                >
+                                                    {isAccepting ? (
+                                                        <Loader2 size={14} className="animate-spin" />
+                                                    ) : (
+                                                        <ThumbsUp size={14} />
+                                                    )}
+                                                    Accept
+                                                </button>
+                                            </div>
+                                        </Card>
+                                    );
+                                })}
+                            </div>
+                        </>
+                    )}
+                </div>
+            )}
 
             {/* Budget List */}
             {loading ? (
