@@ -1,153 +1,153 @@
-import axios from 'axios';
+import axios, { AxiosResponse } from 'axios';
+import type {
+  AuthResponse,
+  LoginRequest,
+  RegisterRequest,
+  Transaction,
+  TransactionCreateRequest,
+  TransactionUpdateRequest,
+  IncomeSource,
+  IncomeSourceCreateRequest,
+  IncomeSourceUpdateRequest,
+  Budget,
+  BudgetCreateRequest,
+  BudgetUpdateRequest,
+  BudgetSuggestionsResponse,
+  Reminder,
+  ReminderCreateRequest,
+  ReminderUpdateRequest,
+  ReceiptParseResponse,
+  ForecastResponse,
+  ForecastInsightResponse,
+  AssistantHistoryResponse,
+  AssistantSendResponse,
+  SpendingDataPoint,
+  User,
+} from '../types';
+
+// ---------------------------------------------------------------------------
+// Axios instance
+// ---------------------------------------------------------------------------
 
 // Use the same hostname as the frontend to keep cookies same-site.
-// This prevents "random" 403/unauthorized behavior when opening the frontend on
-// 127.0.0.1 but calling the backend on localhost (or vice versa).
-const API_HOST = (typeof window !== 'undefined' && window.location?.hostname) ? window.location.hostname : 'localhost';
+// This prevents "random" 403/unauthorized behaviour when the frontend is
+// opened on 127.0.0.1 but calls the backend on localhost (or vice-versa).
+const API_HOST =
+  typeof window !== 'undefined' && window.location?.hostname
+    ? window.location.hostname
+    : 'localhost';
+
 const API_URL = `http://${API_HOST}:8000/api`;
 
 const api = axios.create({
-    baseURL: API_URL,
-    withCredentials: true, // Important for cookies (CSRF, Session)
-    headers: {
-        'Content-Type': 'application/json',
-    },
+  baseURL: API_URL,
+  withCredentials: true, // required for cookies (CSRF, session)
+  headers: { 'Content-Type': 'application/json' },
 });
+
+// ---------------------------------------------------------------------------
+// CSRF helpers
+// ---------------------------------------------------------------------------
 
 const readCookie = (name: string): string => {
-    if (typeof document === 'undefined') return '';
-    const value = `; ${document.cookie}`;
-    const parts = value.split(`; ${name}=`);
-    return (parts.length === 2 ? parts.pop()?.split(';').shift() : '') || '';
+  if (typeof document === 'undefined') return '';
+  const value = `; ${document.cookie}`;
+  const parts = value.split(`; ${name}=`);
+  return (parts.length === 2 ? parts.pop()?.split(';').shift() : '') || '';
 };
 
-// CSRF Token handling for Django
-const getCsrfToken = async () => {
-    try {
-        const response = await api.get('/auth/csrf/');
-        api.defaults.headers.common['X-CSRFToken'] = response.data.csrfToken;
-    } catch (error) {
-        console.error("Failed to fetch CSRF token", error);
-    }
+// Fetch the CSRF cookie from Django on startup so the very first unsafe
+// request already has a token available.
+const initCsrf = async (): Promise<void> => {
+  try {
+    await api.get('/auth/csrf/');
+  } catch (error) {
+    console.error('Failed to fetch CSRF cookie', error);
+  }
 };
 
-// Initialize CSRF token
-getCsrfToken();
+initCsrf();
 
-// Add a request interceptor to ensure CSRF token is present if needed
-api.interceptors.request.use(async (config) => {
-    // Ensure CSRF token is sent for unsafe methods.
-    const method = (config.method || 'get').toLowerCase();
+// ---------------------------------------------------------------------------
+// Request interceptor
+// ---------------------------------------------------------------------------
+
+api.interceptors.request.use(
+  (config) => {
+    const method = (config.method ?? 'get').toLowerCase();
     const needsCsrf = !['get', 'head', 'options', 'trace'].includes(method);
 
+    // Attach the CSRF token from the cookie for every unsafe request.
     if (needsCsrf) {
-        const token = readCookie('csrftoken');
-        if (token) {
-            // Axios v1 uses AxiosHeaders in many cases; support both shapes.
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const headers: any = config.headers ?? {};
-            if (typeof headers.set === 'function') {
-                headers.set('X-CSRFToken', token);
-            } else {
-                headers['X-CSRFToken'] = token;
-            }
-            config.headers = headers;
-        }
+      const token = readCookie('csrftoken');
+      if (token) {
+        config.headers.set('X-CSRFToken', token);
+      }
     }
 
-    // If sending FormData, do not force Content-Type to application/json.
-    // Let the browser/axios set multipart boundaries.
+    // When sending FormData, let the browser set the multipart boundary.
     if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const headers: any = config.headers ?? {};
-        if (typeof headers.delete === 'function') {
-            headers.delete('Content-Type');
-        } else {
-            delete headers['Content-Type'];
-        }
-        config.headers = headers;
+      config.headers.delete('Content-Type');
     }
+
     return config;
-}, (error) => {
-    return Promise.reject(error);
-});
+  },
+  (error) => Promise.reject(error),
+);
+
+// ---------------------------------------------------------------------------
+// Typed API modules
+// ---------------------------------------------------------------------------
 
 export default api;
 
-// API Functions
 export const auth = {
-    login: (data: any) => api.post('/auth/login/', data),
-    register: (data: any) => api.post('/auth/register/', data),
-    logout: () => api.post('/auth/logout/'),
-    getCurrentUser: () => api.get('/auth/user/'),
+  login:          (data: LoginRequest):    Promise<AxiosResponse<AuthResponse>> => api.post('/auth/login/', data),
+  register:       (data: RegisterRequest): Promise<AxiosResponse<AuthResponse>> => api.post('/auth/register/', data),
+  logout:         ():                      Promise<AxiosResponse<{ message: string }>> => api.post('/auth/logout/'),
+  getCurrentUser: ():                      Promise<AxiosResponse<User>> => api.get('/auth/user/'),
 };
 
 export const transactions = {
-    getAll: () => api.get('/transactions/'),
-    create: (data: any) => {
-        // Let Axios set the multipart boundary automatically for FormData.
-        const config = data instanceof FormData ? {} : {};
-        return api.post('/transactions/', data, config);
-    },
-    update: (id: number, data: any) => api.put(`/transactions/${id}/`, data),
-    delete: (id: number) => api.delete(`/transactions/${id}/`),
-    export: () => api.get('/transactions/export/', { responseType: 'blob' }),
-    import: (formData: FormData) => api.post('/transactions/import/', formData, {
-        // Let Axios set the multipart boundary automatically.
-    }),
+  getAll:  ():                                              Promise<AxiosResponse<Transaction[]>> => api.get('/transactions/'),
+  create:  (data: TransactionCreateRequest | FormData):     Promise<AxiosResponse<Transaction>>   => api.post('/transactions/', data),
+  update:  (id: number, data: TransactionUpdateRequest):    Promise<AxiosResponse<Transaction>>   => api.put(`/transactions/${id}/`, data),
+  delete:  (id: number):                                    Promise<AxiosResponse<void>>           => api.delete(`/transactions/${id}/`),
+  export:  ():                                              Promise<AxiosResponse<Blob>>           => api.get('/transactions/export/', { responseType: 'blob' }),
+  import:  (formData: FormData):                            Promise<AxiosResponse<{ imported: number }>> => api.post('/transactions/import/', formData),
 };
 
 export const receipts = {
-    upload: (formData: FormData) => api.post('/upload-receipt/', formData, {
-        // Let Axios set the multipart boundary automatically.
-    }),
+  upload: (formData: FormData): Promise<AxiosResponse<ReceiptParseResponse>> => api.post('/upload-receipt/', formData),
 };
 
 export const incomeSources = {
-    getAll: () => api.get('/income-sources/'),
-    create: (data: { name: string; monthly_amount: number; active?: boolean }) => api.post('/income-sources/', data),
-    update: (id: number, data: Partial<{ name: string; monthly_amount: number; active: boolean }>) => api.put(`/income-sources/${id}/`, data),
-    delete: (id: number) => api.delete(`/income-sources/${id}/`),
+  getAll:  ():                                                  Promise<AxiosResponse<IncomeSource[]>> => api.get('/income-sources/'),
+  create:  (data: IncomeSourceCreateRequest):                   Promise<AxiosResponse<IncomeSource>>   => api.post('/income-sources/', data),
+  update:  (id: number, data: IncomeSourceUpdateRequest):       Promise<AxiosResponse<IncomeSource>>   => api.put(`/income-sources/${id}/`, data),
+  delete:  (id: number):                                        Promise<AxiosResponse<void>>           => api.delete(`/income-sources/${id}/`),
 };
 
 export const budgets = {
-    getAll: (month?: string) => api.get('/budgets/', { params: month ? { month } : {} }),
-    create: (data: { category: string; limit_amount: number; month: string }) => api.post('/budgets/', data),
-    update: (id: number, data: Partial<{ category: string; limit_amount: number; month: string }>) => api.put(`/budgets/${id}/`, data),
-    delete: (id: number) => api.delete(`/budgets/${id}/`),
-    getAISuggestions: (month?: string) => api.get('/ai/budget-suggestions/', { params: month ? { month } : {} }),
+  getAll:           (month?: string): Promise<AxiosResponse<Budget[]>>                => api.get('/budgets/', { params: month ? { month } : {} }),
+  create:           (data: BudgetCreateRequest):  Promise<AxiosResponse<Budget>>      => api.post('/budgets/', data),
+  update:           (id: number, data: BudgetUpdateRequest): Promise<AxiosResponse<Budget>> => api.put(`/budgets/${id}/`, data),
+  delete:           (id: number):   Promise<AxiosResponse<void>>                      => api.delete(`/budgets/${id}/`),
+  getAISuggestions: (month?: string): Promise<AxiosResponse<BudgetSuggestionsResponse>> => api.get('/ai/budget-suggestions/', { params: month ? { month } : {} }),
 };
 
 export const ai = {
-    forecastInsights: (spendingData: any) => api.post('/ai/forecast-insights/', { spendingData }),
-    forecast: () => api.get('/ai/forecast/'),
-    assistantHistory: () => api.get('/ai/assistant/history/'),
-    assistantSend: (message: string) => api.post('/ai/assistant/send/', { message }),
+  forecastInsights: (spendingData: SpendingDataPoint[]): Promise<AxiosResponse<ForecastInsightResponse>>   => api.post('/ai/forecast-insights/', { spendingData }),
+  forecast:         ():                                  Promise<AxiosResponse<ForecastResponse>>           => api.get('/ai/forecast/'),
+  assistantHistory: ():                                  Promise<AxiosResponse<AssistantHistoryResponse>>   => api.get('/ai/assistant/history/'),
+  assistantSend:    (message: string):                   Promise<AxiosResponse<AssistantSendResponse>>      => api.post('/ai/assistant/send/', { message }),
 };
 
 export const reminders = {
-    getAll: (status?: 'pending' | 'paid' | 'overdue') => 
-        api.get('/reminders/', { params: status ? { status } : {} }),
-    create: (data: {
-        title: string;
-        amount: number;
-        due_date: string;
-        frequency?: string;
-        email_reminder?: boolean;
-        reminder_days_before?: number;
-        notes?: string;
-    }) => api.post('/reminders/', data),
-    update: (id: number, data: Partial<{
-        title: string;
-        amount: number;
-        due_date: string;
-        frequency: string;
-        is_paid: boolean;
-        email_reminder: boolean;
-        reminder_days_before: number;
-        notes: string;
-    }>) => api.put(`/reminders/${id}/`, data),
-    delete: (id: number) => api.delete(`/reminders/${id}/`),
-    togglePaid: (id: number) => api.post(`/reminders/${id}/toggle_paid/`),
-    sendTestEmail: () => api.post('/reminders/send_test_email/'),
+  getAll:        (status?: 'pending' | 'paid' | 'overdue'): Promise<AxiosResponse<Reminder[]>>            => api.get('/reminders/', { params: status ? { status } : {} }),
+  create:        (data: ReminderCreateRequest):              Promise<AxiosResponse<Reminder>>              => api.post('/reminders/', data),
+  update:        (id: number, data: ReminderUpdateRequest):  Promise<AxiosResponse<Reminder>>              => api.put(`/reminders/${id}/`, data),
+  delete:        (id: number):                               Promise<AxiosResponse<void>>                  => api.delete(`/reminders/${id}/`),
+  togglePaid:    (id: number):                               Promise<AxiosResponse<Reminder>>              => api.post(`/reminders/${id}/toggle_paid/`),
+  sendTestEmail: ():                                         Promise<AxiosResponse<{ message: string }>>   => api.post('/reminders/send_test_email/'),
 };

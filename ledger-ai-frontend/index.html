@@ -6,34 +6,99 @@
     <title>Ledger AI</title>
     <meta name="description" content="AI-Powered Personal Finance Tracker" />
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600;14..32,700&display=swap" rel="stylesheet">
     <style>
+      *,
+      *::before,
+      *::after { box-sizing: border-box; }
+
       body {
-        font-family: 'Inter', sans-serif;
-        background-color: #FAFAFA;
-        color: #18181B;
+        font-family: 'Inter', system-ui, -apple-system, sans-serif;
+        background-color: #fafafa;
+        color: #18181b;
         overflow-x: hidden;
-      }
-      
-      /* Smooth Scrolling */
-      html {
-        scroll-behavior: smooth;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
       }
 
-      /* Custom Scrollbar */
-      ::-webkit-scrollbar {
-        width: 6px;
+      /* Smooth Scrolling */
+      html { scroll-behavior: smooth; }
+
+      /* Custom Scrollbar — thinner & blends in */
+      ::-webkit-scrollbar { width: 5px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      ::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 99px; }
+      ::-webkit-scrollbar-thumb:hover { background: #a1a1aa; }
+
+      /* --- Page-enter animation --- */
+      .page-enter {
+        animation: pageEnter 0.5s ease-out both;
       }
-      ::-webkit-scrollbar-track {
-        background: transparent;
+      .stagger-1 { animation-delay: 0ms; }
+      .stagger-2 { animation-delay: 60ms; }
+      .stagger-3 { animation-delay: 120ms; }
+      .stagger-4 { animation-delay: 180ms; }
+      .stagger-5 { animation-delay: 240ms; }
+
+      @keyframes pageEnter {
+        from { opacity: 0; transform: translateY(12px); }
+        to   { opacity: 1; transform: translateY(0); }
       }
-      ::-webkit-scrollbar-thumb {
-        background: #D4D4D8;
-        border-radius: 10px;
+
+      /* --- Reveal text --- */
+      .reveal-text {
+        opacity: 0;
+        transform: translateY(16px);
+        animation: revealText 0.45s ease-out forwards;
       }
-      ::-webkit-scrollbar-thumb:hover {
-        background: #71717A;
+      @keyframes revealText {
+        to { opacity: 1; transform: translateY(0); }
       }
+
+      /* --- Shimmer for primary button --- */
+      @keyframes shimmer {
+        to { transform: translateX(200%); }
+      }
+      .animate-shimmer { animation: shimmer 1.5s ease-in-out; }
+
+      /* --- Float (AI sparkle) --- */
+      @keyframes float {
+        0%, 100% { transform: translateY(0) rotate(0deg); }
+        50%      { transform: translateY(-6px) rotate(3deg); }
+      }
+      .animate-float { animation: float 4s ease-in-out infinite; }
+
+      /* --- Scan-line for receipt upload --- */
+      @keyframes scanLine {
+        0%, 100% { top: 10%; opacity: 0; }
+        30% { opacity: 1; }
+        70% { opacity: 1; }
+        50% { top: 85%; }
+      }
+      .animate-scan-line { animation: scanLine 2.5s ease-in-out infinite; }
+
+      /* --- Slow ping for voice mic --- */
+      @keyframes pingSlow {
+        0%   { transform: scale(1); opacity: 0.4; }
+        100% { transform: scale(1.6); opacity: 0; }
+      }
+      @keyframes pingSlower {
+        0%   { transform: scale(1); opacity: 0.3; }
+        100% { transform: scale(1.8); opacity: 0; }
+      }
+      .animate-ping-slow  { animation: pingSlow 2s ease-out infinite; }
+      .animate-ping-slower { animation: pingSlower 2.5s ease-out infinite 0.3s; }
+
+      /* --- Shake for validation errors --- */
+      @keyframes shake {
+        0%, 100% { transform: translateX(0); }
+        20%, 60% { transform: translateX(-4px); }
+        40%, 80% { transform: translateX(4px); }
+      }
+      .animate-shake { animation: shake 0.4s ease-in-out; }
+
+      /* Tabular nums for financial figures */
+      .tabular-nums { font-variant-numeric: tabular-nums; }
     </style>
   <script type="importmap">
 {
