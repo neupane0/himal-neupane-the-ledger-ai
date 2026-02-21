@@ -3,7 +3,7 @@ import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Receipt, PlusCircle, Users, PieChart,
   TrendingUp, Bell, User, LogOut, Menu, X, Image as ImageIcon, BarChart3,
-  ChevronLeft
+  ChevronLeft, Repeat
 } from 'lucide-react';
 import { AppRoute } from '../types';
 import { auth } from '../services/api';
@@ -34,6 +34,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     { icon: PieChart, label: 'Budgets', path: AppRoute.BUDGETS },
     { icon: TrendingUp, label: 'Forecast', path: AppRoute.FORECAST },
     { icon: Bell, label: 'Reminders', path: AppRoute.REMINDERS },
+    { icon: Repeat, label: 'Recurring', path: AppRoute.RECURRING },
     { icon: User, label: 'Profile', path: AppRoute.PROFILE },
   ];
 

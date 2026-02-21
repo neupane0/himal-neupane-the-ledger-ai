@@ -12,6 +12,7 @@ import GroupDetails from './pages/GroupDetails';
 import Budgets from './pages/Budgets';
 import Forecast from './pages/Forecast';
 import Reminders from './pages/Reminders';
+import RecurringTransactions from './pages/RecurringTransactions';
 import Profile from './pages/Profile';
 import CategoryAnalytics from './pages/CategoryAnalytics';
 import Assistant from './pages/Assistant';
@@ -40,6 +41,7 @@ const App: React.FC = () => {
           <Route path={AppRoute.BUDGETS} element={<Budgets />} />
           <Route path={AppRoute.FORECAST} element={<Forecast />} />
           <Route path={AppRoute.REMINDERS} element={<Reminders />} />
+          <Route path={AppRoute.RECURRING} element={<RecurringTransactions />} />
           <Route path={AppRoute.PROFILE} element={<Profile />} />
           <Route path={AppRoute.CATEGORY_ANALYTICS} element={<CategoryAnalytics />} />
 

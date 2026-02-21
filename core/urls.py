@@ -8,6 +8,7 @@ from .views import (
     IncomeSourceViewSet,
     BudgetViewSet,
     ReminderViewSet,
+    RecurringTransactionViewSet,
     register,
     login_view,
     logout_view,
@@ -33,6 +34,7 @@ router.register(r'transactions', TransactionViewSet, basename='transaction')
 router.register(r'income-sources', IncomeSourceViewSet, basename='income-source')
 router.register(r'budgets', BudgetViewSet, basename='budget')
 router.register(r'reminders', ReminderViewSet, basename='reminder')
+router.register(r'recurring-transactions', RecurringTransactionViewSet, basename='recurring-transaction')
 
 @require_http_methods(['GET'])
 @ensure_csrf_cookie

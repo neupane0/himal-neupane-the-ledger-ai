@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
-from .models import Transaction, IncomeSource, Budget, Reminder
+from .models import Transaction, IncomeSource, Budget, Reminder, RecurringTransaction
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
@@ -69,3 +69,21 @@ class ReminderSerializer(serializers.ModelSerializer):
             "notes", "is_overdue", "created_at", "updated_at"
         ]
         read_only_fields = ["id", "owner", "is_overdue", "created_at", "updated_at"]
+
+
+class RecurringTransactionSerializer(serializers.ModelSerializer):
+    owner = serializers.ReadOnlyField(source='owner.username')
+
+    class Meta:
+        model = RecurringTransaction
+        fields = [
+            "id", "owner", "title", "amount", "category", "frequency",
+            "start_date", "end_date", "next_due_date", "is_active",
+            "notes", "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "owner", "next_due_date", "created_at", "updated_at"]
+
+    def create(self, validated_data):
+        # next_due_date defaults to start_date when creating
+        validated_data['next_due_date'] = validated_data.get('start_date')
+        return super().create(validated_data)

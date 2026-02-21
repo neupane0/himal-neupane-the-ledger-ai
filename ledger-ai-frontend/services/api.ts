@@ -16,6 +16,9 @@ import type {
   Reminder,
   ReminderCreateRequest,
   ReminderUpdateRequest,
+  RecurringTransaction,
+  RecurringTransactionCreateRequest,
+  RecurringTransactionUpdateRequest,
   ReceiptParseResponse,
   ForecastResponse,
   ForecastInsightResponse,
@@ -150,4 +153,12 @@ export const reminders = {
   delete:        (id: number):                               Promise<AxiosResponse<void>>                  => api.delete(`/reminders/${id}/`),
   togglePaid:    (id: number):                               Promise<AxiosResponse<Reminder>>              => api.post(`/reminders/${id}/toggle_paid/`),
   sendTestEmail: ():                                         Promise<AxiosResponse<{ message: string }>>   => api.post('/reminders/send_test_email/'),
+};
+
+export const recurringTransactions = {
+  getAll:       ():                                                                  Promise<AxiosResponse<RecurringTransaction[]>> => api.get('/recurring-transactions/'),
+  create:       (data: RecurringTransactionCreateRequest):                            Promise<AxiosResponse<RecurringTransaction>>   => api.post('/recurring-transactions/', data),
+  update:       (id: number, data: RecurringTransactionUpdateRequest):                Promise<AxiosResponse<RecurringTransaction>>   => api.put(`/recurring-transactions/${id}/`, data),
+  delete:       (id: number):                                                        Promise<AxiosResponse<void>>                   => api.delete(`/recurring-transactions/${id}/`),
+  toggleActive: (id: number):                                                        Promise<AxiosResponse<RecurringTransaction>>   => api.post(`/recurring-transactions/${id}/toggle_active/`),
 };

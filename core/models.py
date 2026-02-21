@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.db import models
 from django.utils import timezone
+from dateutil.relativedelta import relativedelta
 
 class Transaction(models.Model):
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="transactions")
@@ -125,3 +126,101 @@ class Reminder(models.Model):
     def is_overdue(self):
         from datetime import date
         return not self.is_paid and self.due_date < date.today()
+
+
+class RecurringTransaction(models.Model):
+    """A rule that automatically materializes Transaction rows on access."""
+
+    FREQ_DAILY = "daily"
+    FREQ_WEEKLY = "weekly"
+    FREQ_BIWEEKLY = "biweekly"
+    FREQ_MONTHLY = "monthly"
+    FREQ_YEARLY = "yearly"
+
+    FREQUENCY_CHOICES = [
+        (FREQ_DAILY, "Daily"),
+        (FREQ_WEEKLY, "Weekly"),
+        (FREQ_BIWEEKLY, "Bi-weekly"),
+        (FREQ_MONTHLY, "Monthly"),
+        (FREQ_YEARLY, "Yearly"),
+    ]
+
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="recurring_transactions",
+    )
+    title = models.CharField(max_length=200)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    category = models.CharField(max_length=100, blank=True, default="")
+    frequency = models.CharField(max_length=20, choices=FREQUENCY_CHOICES, default=FREQ_MONTHLY)
+    start_date = models.DateField()
+    end_date = models.DateField(null=True, blank=True, help_text="Leave blank to repeat indefinitely")
+    next_due_date = models.DateField(db_index=True)
+    is_active = models.BooleanField(default=True)
+    notes = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["next_due_date", "-id"]
+
+    def __str__(self):
+        return f"{self.title} - ${self.amount} ({self.get_frequency_display()})"
+
+    # ── Internal helpers ──────────────────────────────────────────────
+
+    def _advance_date(self, dt):
+        """Return the next occurrence after *dt* according to frequency."""
+        deltas = {
+            self.FREQ_DAILY: relativedelta(days=1),
+            self.FREQ_WEEKLY: relativedelta(weeks=1),
+            self.FREQ_BIWEEKLY: relativedelta(weeks=2),
+            self.FREQ_MONTHLY: relativedelta(months=1),
+            self.FREQ_YEARLY: relativedelta(years=1),
+        }
+        return dt + deltas[self.frequency]
+
+    # ── Lazy materialisation ──────────────────────────────────────────
+
+    @staticmethod
+    def materialize_due(user):
+        """
+        Create Transaction rows for every recurring rule whose next_due_date
+        is in the past (or today).  Safe to call on every request — it only
+        writes when something is actually due.
+        """
+        from datetime import date
+
+        today = date.today()
+
+        rules = RecurringTransaction.objects.filter(
+            owner=user,
+            is_active=True,
+            next_due_date__lte=today,
+        ).select_for_update()
+
+        created = []
+
+        for rule in rules:
+            while rule.next_due_date <= today:
+                # Respect optional end-date
+                if rule.end_date and rule.next_due_date > rule.end_date:
+                    rule.is_active = False
+                    break
+
+                txn = Transaction.objects.create(
+                    owner=user,
+                    title=rule.title,
+                    amount=rule.amount,
+                    date=rule.next_due_date,
+                    category=rule.category,
+                    notes=f"Auto-generated from recurring: {rule.title}",
+                )
+                created.append(txn)
+
+                rule.next_due_date = rule._advance_date(rule.next_due_date)
+
+            rule.save()
+
+        return created

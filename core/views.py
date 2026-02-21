@@ -8,8 +8,8 @@ from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.models import User
 from django.views.decorators.csrf import ensure_csrf_cookie, csrf_exempt
 from django.utils.decorators import method_decorator
-from .models import Transaction, IncomeSource, AssistantConversation, AssistantMessage, Budget, Reminder
-from .serializers import TransactionSerializer, UserSerializer, IncomeSourceSerializer, BudgetSerializer, ReminderSerializer
+from .models import Transaction, IncomeSource, AssistantConversation, AssistantMessage, Budget, Reminder, RecurringTransaction
+from .serializers import TransactionSerializer, UserSerializer, IncomeSourceSerializer, BudgetSerializer, ReminderSerializer, RecurringTransactionSerializer
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
@@ -23,6 +23,8 @@ class TransactionViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
+        # Lazy-materialise any due recurring transactions before listing
+        RecurringTransaction.materialize_due(self.request.user)
         return Transaction.objects.filter(owner=self.request.user).order_by('-date', '-id')
 
     def perform_create(self, serializer):
@@ -118,6 +120,25 @@ class ReminderViewSet(viewsets.ModelViewSet):
                 {'error': 'Failed to send email. Check email configuration.'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+class RecurringTransactionViewSet(viewsets.ModelViewSet):
+    serializer_class = RecurringTransactionSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return RecurringTransaction.objects.filter(owner=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(owner=self.request.user)
+
+    @action(detail=True, methods=['post'])
+    def toggle_active(self, request, pk=None):
+        """Pause or resume a recurring rule."""
+        rule = self.get_object()
+        rule.is_active = not rule.is_active
+        rule.save()
+        return Response(RecurringTransactionSerializer(rule).data)
 
 
 @api_view(['POST'])
@@ -256,23 +277,30 @@ def forecast_insights(request):
 @permission_classes([permissions.IsAuthenticated])
 def financial_forecast(request):
     """
-    Generate financial forecast using ML algorithms.
-    Uses linear regression for trend prediction and provides category-wise analysis.
+    Generate financial forecast using three ML/statistical algorithms:
+      1. Linear Regression with seasonality adjustment
+      2. Holt's Double Exponential Smoothing (level + trend)
+      3. Monte Carlo Simulation (probabilistic with confidence bands)
+    Returns an ensemble prediction (weighted average) plus per-algorithm detail.
     """
     from datetime import date, timedelta
     from dateutil.relativedelta import relativedelta
     from collections import defaultdict
     import statistics
-    
+    import random
+    import math
+
     user = request.user
     transactions = Transaction.objects.filter(owner=user).order_by('date')
     income_sources = IncomeSource.objects.filter(owner=user, active=True)
-    
+
+    # ── Empty-data early returns ──────────────────────────────────────────
     if not transactions.exists():
         return Response({
             'monthly_data': [],
             'predictions': [],
             'category_breakdown': [],
+            'algorithms': {},
             'insights': {
                 'total_predicted_spending': 0,
                 'predicted_savings': 0,
@@ -282,29 +310,23 @@ def financial_forecast(request):
                 'recommendation': 'Start tracking your expenses to get personalized predictions.'
             }
         })
-    
-    # Get date range
+
     today = date.today()
-    first_transaction_date = transactions.first().date
-    
-    # Aggregate spending by month
+
+    # ── Aggregate spending by month ───────────────────────────────────────
     monthly_spending = defaultdict(lambda: {'total': 0, 'categories': defaultdict(float)})
-    
+
     for txn in transactions:
-        # All transactions are expenses (no transaction_type field)
-        # Skip if category is 'Income' (treat as not an expense)
         if txn.category and txn.category.lower() == 'income':
             continue
         month_key = txn.date.strftime('%Y-%m')
         amount = float(txn.amount)
         monthly_spending[month_key]['total'] += amount
         monthly_spending[month_key]['categories'][txn.category or 'Uncategorized'] += amount
-    
-    # Build historical data array for regression
+
     sorted_months = sorted(monthly_spending.keys())
-    
+
     if len(sorted_months) < 2:
-        # Not enough data for prediction
         current_month = today.strftime('%Y-%m')
         current_spending = monthly_spending.get(current_month, {'total': 0})['total']
         return Response({
@@ -312,10 +334,14 @@ def financial_forecast(request):
                 'month': current_month,
                 'actual': current_spending,
                 'predicted': None,
+                'predicted_lr': None,
+                'predicted_ema': None,
+                'predicted_mc': None,
                 'label': today.strftime('%b %Y')
             }],
             'predictions': [],
             'category_breakdown': [],
+            'algorithms': {},
             'insights': {
                 'total_predicted_spending': current_spending,
                 'predicted_savings': 0,
@@ -325,104 +351,224 @@ def financial_forecast(request):
                 'recommendation': 'Keep tracking your expenses for at least 2 months to get accurate predictions.'
             }
         })
-    
-    # Linear regression for overall trend
+
+    x_values = list(range(len(sorted_months)))
+    y_values = [monthly_spending[m]['total'] for m in sorted_months]
+
+    # ══════════════════════════════════════════════════════════════════════
+    # ALGORITHM 1 — Linear Regression + Seasonality
+    # ══════════════════════════════════════════════════════════════════════
+
     def linear_regression(x_vals, y_vals):
         n = len(x_vals)
         if n < 2:
             return 0, y_vals[0] if y_vals else 0
-        
         mean_x = sum(x_vals) / n
         mean_y = sum(y_vals) / n
-        
         numerator = sum((x_vals[i] - mean_x) * (y_vals[i] - mean_y) for i in range(n))
         denominator = sum((x_vals[i] - mean_x) ** 2 for i in range(n))
-        
         if denominator == 0:
             return 0, mean_y
-        
         slope = numerator / denominator
         intercept = mean_y - slope * mean_x
-        
         return slope, intercept
-    
-    # Prepare data for regression
-    x_values = list(range(len(sorted_months)))
-    y_values = [monthly_spending[m]['total'] for m in sorted_months]
-    
+
     slope, intercept = linear_regression(x_values, y_values)
-    
-    # Build monthly data with actuals
+
+    # Seasonality indices
+    monthly_averages = defaultdict(list)
+    for month_key in sorted_months:
+        month_num = int(month_key.split('-')[1])
+        monthly_averages[month_num].append(monthly_spending[month_key]['total'])
+    overall_avg = sum(y_values) / len(y_values) if y_values else 0
+    seasonality = {}
+    for month_num, values in monthly_averages.items():
+        avg = sum(values) / len(values)
+        seasonality[month_num] = avg / overall_avg if overall_avg > 0 else 1.0
+
+    # Fitted values (historical)
+    lr_fitted = [round(slope * i + intercept, 2) for i in x_values]
+
+    # Future values
+    last_index = len(sorted_months) - 1
+    lr_predictions = []
+    for i in range(1, 7):
+        future_index = last_index + i
+        future_date = today + relativedelta(months=i)
+        base = slope * future_index + intercept
+        seasonal_factor = seasonality.get(future_date.month, 1.0)
+        lr_predictions.append(round(max(0, base * seasonal_factor), 2))
+
+    # ══════════════════════════════════════════════════════════════════════
+    # ALGORITHM 2 — Holt's Double Exponential Smoothing
+    # ══════════════════════════════════════════════════════════════════════
+
+    def holts_double_exponential(y_vals, alpha=0.3, beta=0.1):
+        """
+        Holt's method captures level + trend.
+        Returns (fitted_values, level, trend) so we can extrapolate.
+        """
+        n = len(y_vals)
+        if n == 0:
+            return [], 0, 0
+        if n == 1:
+            return [y_vals[0]], y_vals[0], 0
+
+        # Initialise: level = first observation, trend = second − first
+        level = y_vals[0]
+        trend = y_vals[1] - y_vals[0]
+        fitted = [level]  # first fitted value
+
+        for t in range(1, n):
+            prev_level = level
+            level = alpha * y_vals[t] + (1 - alpha) * (prev_level + trend)
+            trend = beta * (level - prev_level) + (1 - beta) * trend
+            fitted.append(round(level + trend, 2))
+
+        return fitted, level, trend
+
+    ema_fitted, ema_level, ema_trend = holts_double_exponential(y_values)
+    ema_predictions = [round(max(0, ema_level + ema_trend * k), 2) for k in range(1, 7)]
+
+    # ══════════════════════════════════════════════════════════════════════
+    # ALGORITHM 3 — Monte Carlo Simulation
+    # ══════════════════════════════════════════════════════════════════════
+
+    def monte_carlo_forecast(y_vals, n_months=6, n_simulations=2000):
+        """
+        Simulate future paths based on the historical distribution of
+        month-over-month *percentage* changes.  Returns median predictions
+        plus P10/P90 confidence bands.
+        """
+        if len(y_vals) < 2:
+            last = y_vals[-1] if y_vals else 0
+            return [last] * n_months, [last] * n_months, [last] * n_months
+
+        # Month-over-month percentage changes
+        pct_changes = []
+        for i in range(1, len(y_vals)):
+            if y_vals[i - 1] > 0:
+                pct_changes.append((y_vals[i] - y_vals[i - 1]) / y_vals[i - 1])
+            else:
+                pct_changes.append(0.0)
+
+        mean_change = sum(pct_changes) / len(pct_changes)
+        if len(pct_changes) > 1:
+            std_change = (sum((c - mean_change) ** 2 for c in pct_changes) / (len(pct_changes) - 1)) ** 0.5
+        else:
+            std_change = abs(mean_change) * 0.2  # fallback
+
+        random.seed(42)  # reproducible
+        simulated_paths = []
+        last_val = y_vals[-1]
+
+        for _ in range(n_simulations):
+            path = []
+            val = last_val
+            for _ in range(n_months):
+                change = random.gauss(mean_change, std_change)
+                val = max(0, val * (1 + change))
+                path.append(val)
+            simulated_paths.append(path)
+
+        # Extract percentiles per month
+        p10, p50, p90 = [], [], []
+        for month_idx in range(n_months):
+            month_vals = sorted(sp[month_idx] for sp in simulated_paths)
+            p10.append(round(month_vals[int(n_simulations * 0.10)], 2))
+            p50.append(round(month_vals[int(n_simulations * 0.50)], 2))
+            p90.append(round(month_vals[int(n_simulations * 0.90)], 2))
+
+        return p50, p10, p90
+
+    mc_median, mc_lower, mc_upper = monte_carlo_forecast(y_values)
+
+    # For fitted (historical), Monte Carlo doesn't have fitted values;
+    # use the last actual as the starting point for each
+    mc_fitted = [round(v, 2) for v in y_values]  # actuals (no fitted concept)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # ENSEMBLE — weighted average of the three algorithms
+    # ══════════════════════════════════════════════════════════════════════
+
+    # Compute MAE for each algorithm on historical data to weight them
+    def _mae(fitted, actuals):
+        errors = [abs(f - a) for f, a in zip(fitted, actuals) if f is not None]
+        return sum(errors) / len(errors) if errors else 1.0
+
+    mae_lr = _mae(lr_fitted, y_values) or 1.0
+    mae_ema = _mae(ema_fitted, y_values) or 1.0
+    mae_mc = _mae(mc_fitted, y_values) or 1.0  # will be 0 (uses actuals), cap it
+
+    # Inverse-MAE weighting (lower error = higher weight)
+    # Add small epsilon to avoid div-by-zero when mc_fitted == actuals
+    eps = 0.01
+    inv_lr = 1.0 / (mae_lr + eps)
+    inv_ema = 1.0 / (mae_ema + eps)
+    inv_mc = 1.0 / (mae_mc + eps)
+    total_inv = inv_lr + inv_ema + inv_mc
+    w_lr = inv_lr / total_inv
+    w_ema = inv_ema / total_inv
+    w_mc = inv_mc / total_inv
+
+    ensemble_predictions = []
+    for i in range(6):
+        val = w_lr * lr_predictions[i] + w_ema * ema_predictions[i] + w_mc * mc_median[i]
+        ensemble_predictions.append(round(max(0, val), 2))
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Build response
+    # ══════════════════════════════════════════════════════════════════════
+
+    # Historical monthly data
     monthly_data = []
     for i, month_key in enumerate(sorted_months):
         month_date = date.fromisoformat(f"{month_key}-01")
         monthly_data.append({
             'month': month_key,
             'actual': round(monthly_spending[month_key]['total'], 2),
-            'predicted': round(slope * i + intercept, 2),
+            'predicted': lr_fitted[i],
+            'predicted_lr': lr_fitted[i],
+            'predicted_ema': ema_fitted[i] if i < len(ema_fitted) else None,
             'label': month_date.strftime('%b %Y')
         })
-    
-    # Generate predictions for next 6 months
+
+    # Future predictions
     predictions = []
-    last_index = len(sorted_months) - 1
-    
-    # Apply seasonality adjustment based on historical patterns
-    monthly_averages = defaultdict(list)
-    for month_key in sorted_months:
-        month_num = int(month_key.split('-')[1])
-        monthly_averages[month_num].append(monthly_spending[month_key]['total'])
-    
-    overall_avg = sum(y_values) / len(y_values) if y_values else 0
-    seasonality = {}
-    for month_num, values in monthly_averages.items():
-        avg = sum(values) / len(values)
-        seasonality[month_num] = avg / overall_avg if overall_avg > 0 else 1.0
-    
-    for i in range(1, 7):  # Next 6 months
-        future_index = last_index + i
-        future_date = today + relativedelta(months=i)
-        month_num = future_date.month
-        
-        # Base prediction from linear regression
-        base_prediction = slope * future_index + intercept
-        
-        # Apply seasonality if we have data for that month
-        seasonal_factor = seasonality.get(month_num, 1.0)
-        adjusted_prediction = max(0, base_prediction * seasonal_factor)
-        
+    for i in range(6):
+        future_date = today + relativedelta(months=i + 1)
         predictions.append({
             'month': future_date.strftime('%Y-%m'),
             'actual': None,
-            'predicted': round(adjusted_prediction, 2),
+            'predicted': ensemble_predictions[i],
+            'predicted_lr': lr_predictions[i],
+            'predicted_ema': ema_predictions[i],
+            'predicted_mc': mc_median[i],
+            'confidence_lower': mc_lower[i],
+            'confidence_upper': mc_upper[i],
             'label': future_date.strftime('%b %Y')
         })
-    
-    # Category breakdown with predictions
+
+    # Category breakdown (uses linear regression per-category as before)
     category_totals = defaultdict(list)
     for month_key in sorted_months:
         for category, amount in monthly_spending[month_key]['categories'].items():
             category_totals[category].append(amount)
-    
+
     category_breakdown = []
     category_trends = {}
-    
+
     for category, values in category_totals.items():
         avg_spending = sum(values) / len(values)
-        
-        # Calculate trend for this category
         if len(values) >= 2:
             cat_x = list(range(len(values)))
             cat_slope, _ = linear_regression(cat_x, values)
             trend_pct = (cat_slope / avg_spending * 100) if avg_spending > 0 else 0
         else:
             trend_pct = 0
-        
         category_trends[category] = trend_pct
-        
-        # Predict next month for this category
         next_month_prediction = avg_spending * (1 + trend_pct / 100) if trend_pct else avg_spending
-        
+
         category_breakdown.append({
             'category': category,
             'average_monthly': round(avg_spending, 2),
@@ -431,32 +577,24 @@ def financial_forecast(request):
             'trend': 'up' if trend_pct > 5 else ('down' if trend_pct < -5 else 'stable'),
             'trend_percentage': round(trend_pct, 1)
         })
-    
-    # Sort by average spending
     category_breakdown.sort(key=lambda x: x['average_monthly'], reverse=True)
-    
-    # Calculate insights
-    total_predicted_6mo = sum(p['predicted'] for p in predictions)
+
+    # Insights
+    total_predicted_6mo = sum(ensemble_predictions)
     avg_predicted_monthly = total_predicted_6mo / 6 if predictions else 0
-    
-    # Monthly income from income sources
     monthly_income = sum(float(src.monthly_amount) for src in income_sources)
     predicted_monthly_savings = monthly_income - avg_predicted_monthly if monthly_income > 0 else 0
-    
-    # Determine trend
+
     if len(y_values) >= 2:
         recent_avg = sum(y_values[-3:]) / min(3, len(y_values))
         older_avg = sum(y_values[:-3]) / max(1, len(y_values) - 3) if len(y_values) > 3 else y_values[0]
         trend_pct = ((recent_avg - older_avg) / older_avg * 100) if older_avg > 0 else 0
     else:
         trend_pct = 0
-    
+
     trend = 'up' if trend_pct > 5 else ('down' if trend_pct < -5 else 'stable')
-    
-    # Find fastest growing category
     top_growing = max(category_trends.items(), key=lambda x: x[1]) if category_trends else (None, 0)
-    
-    # Generate recommendation
+
     if trend == 'up' and trend_pct > 15:
         recommendation = f"Your spending is increasing by {abs(trend_pct):.1f}% monthly. Consider reviewing your {category_breakdown[0]['category'] if category_breakdown else 'largest expense'} spending."
     elif trend == 'down':
@@ -467,11 +605,38 @@ def financial_forecast(request):
         recommendation = f"Your {top_growing[0]} spending is growing rapidly ({top_growing[1]:.1f}%/month). Consider setting a budget limit."
     else:
         recommendation = "Your spending is stable. Consider automating savings transfers to build your emergency fund."
-    
+
+    # Algorithm summary
+    algorithms = {
+        'linear_regression': {
+            'name': 'Linear Regression',
+            'description': 'Fits a straight-line trend to your spending history with seasonal adjustment.',
+            'mae': round(mae_lr, 2),
+            'weight': round(w_lr * 100, 1),
+            'next_month': lr_predictions[0],
+        },
+        'exponential_smoothing': {
+            'name': 'Exponential Smoothing',
+            'description': "Holt's method that adapts to recent level and trend changes faster than linear regression.",
+            'mae': round(mae_ema, 2),
+            'weight': round(w_ema * 100, 1),
+            'next_month': ema_predictions[0],
+        },
+        'monte_carlo': {
+            'name': 'Monte Carlo',
+            'description': 'Runs 2,000 random simulations based on your historical spending volatility. Provides confidence bands.',
+            'mae': round(mae_mc, 2),
+            'weight': round(w_mc * 100, 1),
+            'next_month': mc_median[0],
+            'confidence_range': f"${mc_lower[0]} – ${mc_upper[0]}",
+        },
+    }
+
     return Response({
         'monthly_data': monthly_data,
         'predictions': predictions,
-        'category_breakdown': category_breakdown[:8],  # Top 8 categories
+        'category_breakdown': category_breakdown[:8],
+        'algorithms': algorithms,
         'insights': {
             'total_predicted_spending': round(total_predicted_6mo, 2),
             'avg_monthly_predicted': round(avg_predicted_monthly, 2),

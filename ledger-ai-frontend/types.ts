@@ -52,6 +52,22 @@ export interface Reminder {
   updated_at: string;
 }
 
+export interface RecurringTransaction {
+  id: number;
+  owner: string;
+  title: string;
+  amount: string; // DecimalField → string
+  category: string;
+  frequency: 'daily' | 'weekly' | 'biweekly' | 'monthly' | 'yearly';
+  start_date: string;
+  end_date: string | null;
+  next_due_date: string;
+  is_active: boolean;
+  notes: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface User {
   id: number;
   username: string;
@@ -154,6 +170,27 @@ export interface ReminderUpdateRequest {
   notes?: string;
 }
 
+export interface RecurringTransactionCreateRequest {
+  title: string;
+  amount: number;
+  category?: string;
+  frequency: string;
+  start_date: string;
+  end_date?: string | null;
+  notes?: string;
+}
+
+export interface RecurringTransactionUpdateRequest {
+  title?: string;
+  amount?: number;
+  category?: string;
+  frequency?: string;
+  start_date?: string;
+  end_date?: string | null;
+  is_active?: boolean;
+  notes?: string;
+}
+
 // ──────────────────────────────────────────────
 // API Response Payloads
 // ──────────────────────────────────────────────
@@ -184,12 +221,19 @@ export interface ForecastResponse {
     month: string;
     actual: number;
     predicted: number;
+    predicted_lr: number;
+    predicted_ema: number | null;
     label: string;
   }>;
   predictions: Array<{
     month: string;
     actual: null;
     predicted: number;
+    predicted_lr: number;
+    predicted_ema: number;
+    predicted_mc: number;
+    confidence_lower: number;
+    confidence_upper: number;
     label: string;
   }>;
   category_breakdown: Array<{
@@ -200,6 +244,11 @@ export interface ForecastResponse {
     trend: 'up' | 'down' | 'stable';
     trend_percentage: number;
   }>;
+  algorithms: {
+    linear_regression: AlgorithmSummary;
+    exponential_smoothing: AlgorithmSummary;
+    monte_carlo: AlgorithmSummary & { confidence_range: string };
+  };
   insights: {
     total_predicted_spending: number;
     avg_monthly_predicted: number;
@@ -211,6 +260,14 @@ export interface ForecastResponse {
     top_growing_percentage: number;
     recommendation: string;
   };
+}
+
+export interface AlgorithmSummary {
+  name: string;
+  description: string;
+  mae: number;
+  weight: number;
+  next_month: number;
 }
 
 export interface AssistantMessage {
@@ -263,6 +320,7 @@ export enum AppRoute {
   BUDGETS = '/budgets',
   FORECAST = '/forecast',
   REMINDERS = '/reminders',
+  RECURRING = '/recurring',
   PROFILE = '/profile',
   CATEGORY_ANALYTICS = '/categories',
 }
