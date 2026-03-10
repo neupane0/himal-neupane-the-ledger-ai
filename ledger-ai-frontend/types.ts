@@ -72,12 +72,20 @@ export interface User {
   id: number;
   username: string;
   email: string;
+  first_name?: string;
+  last_name?: string;
+  date_joined?: string;
+  is_2fa_enabled?: boolean;
 }
 
 export interface UserProfile {
+  id: number;
   username: string;
   email: string;
-  avatar: string;
+  first_name: string;
+  last_name: string;
+  date_joined: string;
+  is_2fa_enabled: boolean;
 }
 
 export interface Group {
@@ -197,7 +205,31 @@ export interface RecurringTransactionUpdateRequest {
 
 export interface AuthResponse {
   message: string;
-  user: User;
+  user?: User;
+  requires_2fa?: boolean;
+}
+
+export interface TwoFASetupResponse {
+  secret: string;
+  qr_code: string;
+  provisioning_uri: string;
+}
+
+export interface TwoFAVerifyResponse {
+  message: string;
+  is_2fa_enabled: boolean;
+}
+
+export interface ChangePasswordRequest {
+  current_password: string;
+  new_password: string;
+}
+
+export interface ProfileUpdateRequest {
+  username?: string;
+  email?: string;
+  first_name?: string;
+  last_name?: string;
 }
 
 export interface ReceiptParseResponse {

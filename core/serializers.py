@@ -1,12 +1,36 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
-from .models import Transaction, IncomeSource, Budget, Reminder, RecurringTransaction
+from .models import Transaction, IncomeSource, Budget, Reminder, RecurringTransaction, UserProfile
+
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ['id', 'username', 'email']
         read_only_fields = ['id']
+
+
+class UserProfileSerializer(serializers.ModelSerializer):
+    """Full profile serializer: user fields + 2FA status."""
+    id = serializers.IntegerField(source='user.id', read_only=True)
+    username = serializers.CharField(source='user.username')
+    email = serializers.EmailField(source='user.email')
+    first_name = serializers.CharField(source='user.first_name', required=False, allow_blank=True)
+    last_name = serializers.CharField(source='user.last_name', required=False, allow_blank=True)
+    date_joined = serializers.DateTimeField(source='user.date_joined', read_only=True)
+    is_2fa_enabled = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = UserProfile
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'date_joined', 'is_2fa_enabled']
+
+    def update(self, instance, validated_data):
+        user_data = validated_data.pop('user', {})
+        user = instance.user
+        for attr, value in user_data.items():
+            setattr(user, attr, value)
+        user.save()
+        return instance
 
 class TransactionSerializer(serializers.ModelSerializer):
     owner = serializers.ReadOnlyField(source='owner.username')

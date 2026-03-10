@@ -48,6 +48,12 @@ def send_reminder_email(to_email: str, reminder_title: str, amount: float, due_d
             .due-date strong {{ color: #dc2626; }}
             .footer {{ text-align: center; margin-top: 24px; font-size: 12px; color: #a1a1aa; }}
             .button {{ display: inline-block; background: #18181b; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; margin-top: 16px; }}
+            .pay-section {{ margin-top: 28px; padding-top: 24px; border-top: 1px solid #e4e4e7; }}
+            .pay-title {{ font-size: 14px; font-weight: 600; color: #18181b; margin-bottom: 14px; }}
+            .pay-buttons {{ text-align: center; }}
+            .pay-btn {{ display: inline-block; padding: 12px 28px; border-radius: 10px; text-decoration: none; font-size: 14px; font-weight: 600; margin: 0 6px 8px 6px; }}
+            .khalti-btn {{ background: #5C2D91; color: #ffffff; }}
+            .esewa-btn {{ background: #60BB46; color: #ffffff; }}
         </style>
     </head>
     <body>
@@ -65,7 +71,15 @@ def send_reminder_email(to_email: str, reminder_title: str, amount: float, due_d
                 <div class="amount">${amount:,.2f}</div>
                 <div class="due-date">Due: <strong>{due_date}</strong></div>
                 
-                <p style="color: #71717a; font-size: 14px;">
+                <div class="pay-section">
+                    <div class="pay-title">Pay Now</div>
+                    <div class="pay-buttons">
+                        <a href="https://app.khalti.com/" class="pay-btn khalti-btn" target="_blank">Pay with Khalti</a>
+                        <a href="https://esewa.com.np/" class="pay-btn esewa-btn" target="_blank">Pay with eSewa</a>
+                    </div>
+                </div>
+                
+                <p style="color: #71717a; font-size: 14px; margin-top: 24px;">
                     Log in to Ledger AI to mark this payment as complete and manage your reminders.
                 </p>
                 

@@ -26,6 +26,11 @@ import type {
   AssistantSendResponse,
   SpendingDataPoint,
   User,
+  UserProfile,
+  TwoFASetupResponse,
+  TwoFAVerifyResponse,
+  ChangePasswordRequest,
+  ProfileUpdateRequest,
 } from '../types';
 
 // ---------------------------------------------------------------------------
@@ -106,9 +111,19 @@ export default api;
 
 export const auth = {
   login:          (data: LoginRequest):    Promise<AxiosResponse<AuthResponse>> => api.post('/auth/login/', data),
+  verify2fa:      (code: string):          Promise<AxiosResponse<AuthResponse>> => api.post('/auth/verify-2fa/', { code }),
   register:       (data: RegisterRequest): Promise<AxiosResponse<AuthResponse>> => api.post('/auth/register/', data),
   logout:         ():                      Promise<AxiosResponse<{ message: string }>> => api.post('/auth/logout/'),
-  getCurrentUser: ():                      Promise<AxiosResponse<User>> => api.get('/auth/user/'),
+  getCurrentUser: ():                      Promise<AxiosResponse<{ user: UserProfile }>> => api.get('/auth/user/'),
+};
+
+export const profile = {
+  get:             ():                                  Promise<AxiosResponse<UserProfile>>           => api.get('/auth/profile/'),
+  update:          (data: ProfileUpdateRequest):         Promise<AxiosResponse<UserProfile>>           => api.put('/auth/profile/', data),
+  changePassword:  (data: ChangePasswordRequest):        Promise<AxiosResponse<{ message: string }>>   => api.post('/auth/change-password/', data),
+  setup2fa:        ():                                  Promise<AxiosResponse<TwoFASetupResponse>>     => api.post('/auth/2fa/setup/'),
+  verify2fa:       (code: string):                      Promise<AxiosResponse<TwoFAVerifyResponse>>    => api.post('/auth/2fa/verify/', { code }),
+  disable2fa:      (code: string):                      Promise<AxiosResponse<TwoFAVerifyResponse>>    => api.post('/auth/2fa/disable/', { code }),
 };
 
 export const transactions = {

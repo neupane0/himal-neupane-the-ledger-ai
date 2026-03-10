@@ -3,23 +3,82 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { Card, Button, Input } from '../components/UI';
 import { AppRoute } from '../types';
 import { auth } from '../services/api';
+import { Shield } from 'lucide-react';
 
 export const Login: React.FC = () => {
     const navigate = useNavigate();
     const [username, setUsername] = React.useState('');
     const [password, setPassword] = React.useState('');
     const [error, setError] = React.useState('');
+    const [needs2fa, setNeeds2fa] = React.useState(false);
+    const [otpCode, setOtpCode] = React.useState('');
 
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
+        setError('');
         try {
-            await auth.login({ username, password });
+            const res = await auth.login({ username, password });
+            if (res.data.requires_2fa) {
+                setNeeds2fa(true);
+                return;
+            }
             navigate(AppRoute.DASHBOARD);
         } catch (err: any) {
             console.error("Login failed", err);
-            setError('Login failed. Please check your credentials.');
+            setError(err?.response?.data?.error || 'Login failed. Please check your credentials.');
         }
     };
+
+    const handleVerify2fa = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setError('');
+        try {
+            await auth.verify2fa(otpCode);
+            navigate(AppRoute.DASHBOARD);
+        } catch (err: any) {
+            console.error("2FA verification failed", err);
+            setError(err?.response?.data?.error || 'Invalid 2FA code.');
+        }
+    };
+
+    if (needs2fa) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-zinc-50 p-4">
+                <Card className="w-full max-w-md p-8">
+                    <div className="text-center mb-8">
+                        <div className="w-12 h-12 bg-indigo-600 rounded-xl flex items-center justify-center mx-auto mb-4">
+                            <Shield className="text-white" size={22} />
+                        </div>
+                        <h2 className="text-2xl font-bold">Two-Factor Authentication</h2>
+                        <p className="text-zinc-500 mt-1">Enter the 6-digit code from your authenticator app.</p>
+                    </div>
+                    {error && <div className="text-red-500 text-sm text-center mb-4">{error}</div>}
+                    <form className="space-y-4" onSubmit={handleVerify2fa}>
+                        <Input
+                            label="Verification Code"
+                            type="text"
+                            inputMode="numeric"
+                            placeholder="000000"
+                            maxLength={6}
+                            value={otpCode}
+                            onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
+                            autoFocus
+                        />
+                        <Button type="submit" className="w-full">Verify</Button>
+                    </form>
+                    <div className="mt-4 text-center">
+                        <button
+                            type="button"
+                            className="text-sm text-zinc-500 hover:text-black hover:underline"
+                            onClick={() => { setNeeds2fa(false); setOtpCode(''); setError(''); }}
+                        >
+                            Back to login
+                        </button>
+                    </div>
+                </Card>
+            </div>
+        );
+    }
 
     return (
         <div className="min-h-screen flex items-center justify-center bg-zinc-50 p-4">

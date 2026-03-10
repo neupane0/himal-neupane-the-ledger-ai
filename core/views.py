@@ -8,14 +8,22 @@ from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.models import User
 from django.views.decorators.csrf import ensure_csrf_cookie, csrf_exempt
 from django.utils.decorators import method_decorator
-from .models import Transaction, IncomeSource, AssistantConversation, AssistantMessage, Budget, Reminder, RecurringTransaction
-from .serializers import TransactionSerializer, UserSerializer, IncomeSourceSerializer, BudgetSerializer, ReminderSerializer, RecurringTransactionSerializer
+from .models import Transaction, IncomeSource, AssistantConversation, AssistantMessage, Budget, Reminder, RecurringTransaction, UserProfile
+from .serializers import TransactionSerializer, UserSerializer, IncomeSourceSerializer, BudgetSerializer, ReminderSerializer, RecurringTransactionSerializer, UserProfileSerializer
+
+
+def _get_or_create_profile(user):
+    """Get or auto-create a UserProfile for the given user."""
+    profile, _ = UserProfile.objects.get_or_create(user=user)
+    return profile
+
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def current_user(request):
+    profile = _get_or_create_profile(request.user)
     return Response({
-        'user': UserSerializer(request.user).data
+        'user': UserProfileSerializer(profile).data
     })
 
 class TransactionViewSet(viewsets.ModelViewSet):
@@ -167,6 +175,9 @@ def register(request):
         password=password
     )
     
+    # Auto-create profile
+    _get_or_create_profile(user)
+    
     login(request, user)
     request.session.modified = True
     
@@ -197,6 +208,17 @@ def login_view(request):
     user = authenticate(request, username=username, password=password)
     
     if user is not None:
+        profile = _get_or_create_profile(user)
+
+        # If 2FA is enabled, don't log in yet — store pending state in session
+        if profile.is_2fa_enabled:
+            request.session['pending_2fa_user_id'] = user.id
+            request.session.modified = True
+            return Response({
+                'requires_2fa': True,
+                'message': 'Please enter your 2FA code.',
+            })
+
         login(request, user)
         request.session.modified = True
         
@@ -210,11 +232,181 @@ def login_view(request):
         status=status.HTTP_401_UNAUTHORIZED
     )
 
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+@ensure_csrf_cookie
+def verify_2fa_login(request):
+    """Complete login after 2FA TOTP verification."""
+    import pyotp
+
+    user_id = request.session.get('pending_2fa_user_id')
+    if not user_id:
+        return Response({'error': 'No pending 2FA session. Please log in again.'},
+                        status=status.HTTP_400_BAD_REQUEST)
+
+    code = request.data.get('code', '').strip()
+    if not code:
+        return Response({'error': '2FA code is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return Response({'error': 'Invalid session.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    profile = _get_or_create_profile(user)
+    if not profile.is_2fa_enabled or not profile.totp_secret:
+        return Response({'error': '2FA is not configured.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    totp = pyotp.TOTP(profile.totp_secret)
+    if not totp.verify(code, valid_window=1):
+        return Response({'error': 'Invalid or expired 2FA code.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+    # 2FA passed — complete login
+    del request.session['pending_2fa_user_id']
+    login(request, user)
+    request.session.modified = True
+
+    return Response({
+        'message': 'Login successful',
+        'user': UserSerializer(user).data
+    })
+
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
 def logout_view(request):
     logout(request)
     return Response({'message': 'Logged out successfully'})
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Profile & 2FA
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@api_view(['GET', 'PUT'])
+@permission_classes([permissions.IsAuthenticated])
+def profile_view(request):
+    """Get or update the authenticated user's profile."""
+    profile = _get_or_create_profile(request.user)
+
+    if request.method == 'GET':
+        return Response(UserProfileSerializer(profile).data)
+
+    # PUT — update
+    serializer = UserProfileSerializer(profile, data=request.data, partial=True)
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(UserProfileSerializer(profile).data)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def change_password(request):
+    """Change the authenticated user's password."""
+    current = request.data.get('current_password', '')
+    new_pw = request.data.get('new_password', '')
+
+    if not current or not new_pw:
+        return Response({'error': 'Both current and new password are required.'},
+                        status=status.HTTP_400_BAD_REQUEST)
+    if len(new_pw) < 8:
+        return Response({'error': 'New password must be at least 8 characters.'},
+                        status=status.HTTP_400_BAD_REQUEST)
+
+    user = request.user
+    if not user.check_password(current):
+        return Response({'error': 'Current password is incorrect.'},
+                        status=status.HTTP_400_BAD_REQUEST)
+
+    user.set_password(new_pw)
+    user.save()
+    # Re-login so the session stays valid
+    login(request, user)
+    request.session.modified = True
+    return Response({'message': 'Password updated successfully.'})
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def setup_2fa(request):
+    """Generate a TOTP secret and return a QR-code data URI.
+    The secret is saved but 2FA is NOT enabled until verify_2fa confirms it."""
+    import pyotp
+    import qrcode
+    import io, base64
+
+    profile = _get_or_create_profile(request.user)
+
+    # Generate a fresh secret each time setup is requested
+    secret = pyotp.random_base32()
+    profile.totp_secret = secret
+    profile.is_2fa_enabled = False  # not active until verified
+    profile.save()
+
+    totp = pyotp.TOTP(secret)
+    provisioning_uri = totp.provisioning_uri(
+        name=request.user.email or request.user.username,
+        issuer_name='Ledger AI',
+    )
+
+    # Render QR to base64 PNG
+    img = qrcode.make(provisioning_uri)
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    qr_b64 = base64.b64encode(buf.getvalue()).decode()
+
+    return Response({
+        'secret': secret,
+        'qr_code': f'data:image/png;base64,{qr_b64}',
+        'provisioning_uri': provisioning_uri,
+    })
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def verify_2fa(request):
+    """Verify a TOTP code and enable 2FA on the profile."""
+    import pyotp
+
+    profile = _get_or_create_profile(request.user)
+    if not profile.totp_secret:
+        return Response({'error': 'Call setup-2fa first.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    code = request.data.get('code', '').strip()
+    if not code:
+        return Response({'error': 'Verification code is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    totp = pyotp.TOTP(profile.totp_secret)
+    if not totp.verify(code, valid_window=1):
+        return Response({'error': 'Invalid code. Please try again.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    profile.is_2fa_enabled = True
+    profile.save()
+    return Response({'message': '2FA enabled successfully.', 'is_2fa_enabled': True})
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def disable_2fa(request):
+    """Disable 2FA (requires a valid TOTP code for confirmation)."""
+    import pyotp
+
+    profile = _get_or_create_profile(request.user)
+    if not profile.is_2fa_enabled:
+        return Response({'error': '2FA is not enabled.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    code = request.data.get('code', '').strip()
+    if not code:
+        return Response({'error': 'Current 2FA code is required to disable.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    totp = pyotp.TOTP(profile.totp_secret)
+    if not totp.verify(code, valid_window=1):
+        return Response({'error': 'Invalid code.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    profile.totp_secret = ''
+    profile.is_2fa_enabled = False
+    profile.save()
+    return Response({'message': '2FA disabled successfully.', 'is_2fa_enabled': False})
 
 
 @api_view(['POST'])

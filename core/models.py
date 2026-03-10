@@ -3,6 +3,19 @@ from django.db import models
 from django.utils import timezone
 from dateutil.relativedelta import relativedelta
 
+
+class UserProfile(models.Model):
+    """Extended user profile with 2FA support."""
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="profile")
+    totp_secret = models.CharField(max_length=64, blank=True, default="")
+    is_2fa_enabled = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Profile({self.user.username})"
+
+
 class Transaction(models.Model):
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="transactions")
     title = models.CharField(max_length=200)
