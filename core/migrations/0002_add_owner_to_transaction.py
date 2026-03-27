@@ -1,20 +1,10 @@
-# Generated migration to add owner field to existing Transaction table
+# This migration is now a no-op.
+# The owner field was already created in 0001_initial.py, so the AddField
+# here caused a DuplicateColumn error. Keeping the file to preserve the
+# migration chain.
 
 from django.conf import settings
-from django.db import migrations, models
-import django.db.models.deletion
-
-
-def set_default_owner(apps, schema_editor):
-    """Set a default owner for existing transactions"""
-    Transaction = apps.get_model('core', 'Transaction')
-    User = apps.get_model(settings.AUTH_USER_MODEL)
-    
-    # Get the first user
-    if User.objects.exists():
-        default_user = User.objects.first()
-        # Set all existing transactions to the default user
-        Transaction.objects.filter(owner__isnull=True).update(owner=default_user)
+from django.db import migrations
 
 
 class Migration(migrations.Migration):
@@ -25,26 +15,6 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
-            model_name='transaction',
-            name='owner',
-            field=models.ForeignKey(
-                null=True,  # Allow null initially for existing records
-                blank=True,
-                on_delete=django.db.models.deletion.CASCADE,
-                related_name='transactions',
-                to=settings.AUTH_USER_MODEL
-            ),
-        ),
-        migrations.RunPython(set_default_owner, migrations.RunPython.noop),
-        migrations.AlterField(
-            model_name='transaction',
-            name='owner',
-            field=models.ForeignKey(
-                on_delete=django.db.models.deletion.CASCADE,
-                related_name='transactions',
-                to=settings.AUTH_USER_MODEL
-            ),
-        ),
+        # No operations needed — owner field already exists from 0001_initial.
     ]
 
