@@ -1,0 +1,30 @@
+databases:
+  - name: ledger-ai-db
+    plan: free
+    databaseName: ledger_ai
+    user: ledger_ai_user
+
+services:
+  - type: web
+    name: ledger-ai-backend
+    plan: free
+    runtime: python
+    buildCommand: "./build.sh"
+    startCommand: "gunicorn ledger_ai_project.wsgi:application"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ledger-ai-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DEBUG
+        value: "False"
+      - key: PYTHON_VERSION
+        value: "3.11.4"
+      - key: FRONTEND_URL
+        value: "https://himal-neupane-the-ledger-ai.vercel.app"
+      - key: CORS_ALLOWED_ORIGINS
+        value: "https://himal-neupane-the-ledger-ai.vercel.app"
+      - key: CSRF_TRUSTED_ORIGINS
+        value: "https://himal-neupane-the-ledger-ai.vercel.app"

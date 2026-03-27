@@ -40,10 +40,10 @@ def _csv_env(name: str, default: str = '') -> list[str]:
     raw = os.getenv(name, default)
     return [value.strip() for value in raw.split(',') if value.strip()]
 
-# Include localhost defaults plus Vercel and Railway deployment hosts.
+# Include localhost defaults plus Vercel, Railway, and Render deployment hosts.
 ALLOWED_HOSTS = _csv_env(
     'ALLOWED_HOSTS',
-    'localhost,127.0.0.1,.vercel.app,.railway.app',
+    'localhost,127.0.0.1,.vercel.app,.railway.app,.onrender.com',
 )
 
 if os.getenv('VERCEL_URL'):
