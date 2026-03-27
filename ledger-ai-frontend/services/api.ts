@@ -37,15 +37,9 @@ import type {
 // Axios instance
 // ---------------------------------------------------------------------------
 
-// Use the same hostname as the frontend to keep cookies same-site.
-// This prevents "random" 403/unauthorized behaviour when the frontend is
-// opened on 127.0.0.1 but calls the backend on localhost (or vice-versa).
-const API_HOST =
-  typeof window !== 'undefined' && window.location?.hostname
-    ? window.location.hostname
-    : 'localhost';
-
-const API_URL = `http://${API_HOST}:8000/api`;
+const API_URL =
+  import.meta.env.VITE_API_BASE_URL ||
+  (import.meta.env.DEV ? 'http://localhost:8000/api' : 'https://ledger-ai-backend-58g0.onrender.com/api');
 
 const api = axios.create({
   baseURL: API_URL,

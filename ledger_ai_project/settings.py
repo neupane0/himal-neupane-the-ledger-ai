@@ -190,11 +190,13 @@ if not DEBUG:
     SECURE_SSL_REDIRECT = _env_bool('SECURE_SSL_REDIRECT', True)
 
 SESSION_COOKIE_SECURE = not DEBUG
-SESSION_COOKIE_SAMESITE = 'Lax'  # Recommended for better security
+# SameSite=None is required for cross-origin cookies (Vercel frontend → Render backend)
+# SameSite=Lax would block cookies on cross-origin requests
+SESSION_COOKIE_SAMESITE = 'Lax' if DEBUG else 'None'
 SESSION_COOKIE_AGE = 86400  # 24 hours in seconds
 
 CSRF_COOKIE_SECURE = not DEBUG
-CSRF_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_SAMESITE = 'Lax' if DEBUG else 'None'
 CSRF_COOKIE_AGE = 86400  # 24 hours in seconds
 CSRF_COOKIE_HTTPONLY = False  # Allow JavaScript to read CSRF cookie
 
