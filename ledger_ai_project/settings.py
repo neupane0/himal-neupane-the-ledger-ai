@@ -168,7 +168,8 @@ default_frontend_origins = (
     'http://localhost:5173,'
     'http://127.0.0.1:5173,'
     'http://localhost:5174,'
-    'http://127.0.0.1:5174'
+    'http://127.0.0.1:5174,'
+    'https://himal-neupane-the-ledger-ai.vercel.app'
 )
 
 CORS_ALLOWED_ORIGINS = _csv_env('CORS_ALLOWED_ORIGINS', default_frontend_origins)
@@ -177,7 +178,7 @@ frontend_url = os.getenv('FRONTEND_URL', '').strip()
 if frontend_url and frontend_url not in CORS_ALLOWED_ORIGINS:
     CORS_ALLOWED_ORIGINS.append(frontend_url)
 
-default_csrf_origins = f'{default_frontend_origins},https://*.vercel.app'
+default_csrf_origins = f'{default_frontend_origins},https://*.vercel.app,https://himal-neupane-the-ledger-ai.vercel.app'
 CSRF_TRUSTED_ORIGINS = _csv_env('CSRF_TRUSTED_ORIGINS', default_csrf_origins)
 
 if frontend_url and frontend_url not in CSRF_TRUSTED_ORIGINS:
