@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 from pathlib import Path
 import os
+import dj_database_url
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -25,16 +26,31 @@ load_dotenv(BASE_DIR / '.env')
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-twxs$^&y$*j22pp@#m8axzfvsl_s%j_q1!$b0ds@@83&d6ly)x'
+SECRET_KEY = os.getenv('SECRET_KEY', '').strip() or 'django-insecure-dev-only-change-me'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+def _env_bool(name: str, default: bool = False) -> bool:
+    return os.getenv(name, str(default)).lower() in ('true', '1', 'yes', 'on')
 
-# Dev hosts
-ALLOWED_HOSTS = [
-    "localhost",
-    "127.0.0.1",
-]
+
+DEBUG = _env_bool('DEBUG', False)
+
+
+def _csv_env(name: str, default: str = '') -> list[str]:
+    raw = os.getenv(name, default)
+    return [value.strip() for value in raw.split(',') if value.strip()]
+
+# Include localhost defaults plus Vercel and Railway deployment hosts.
+ALLOWED_HOSTS = _csv_env(
+    'ALLOWED_HOSTS',
+    'localhost,127.0.0.1,.vercel.app,.railway.app',
+)
+
+if os.getenv('VERCEL_URL'):
+    ALLOWED_HOSTS = [*ALLOWED_HOSTS, os.getenv('VERCEL_URL', '')]
+
+if os.getenv('RAILWAY_PUBLIC_DOMAIN'):
+    ALLOWED_HOSTS = [*ALLOWED_HOSTS, os.getenv('RAILWAY_PUBLIC_DOMAIN', '')]
 
 
 # Application definition
@@ -60,6 +76,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -94,14 +111,11 @@ WSGI_APPLICATION = 'ledger_ai_project.wsgi.application'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('DB_NAME', 'ledger_ai'),
-        'USER': os.getenv('DB_USER', 'postgres'),
-        'PASSWORD': os.getenv('DB_PASSWORD', 'postgres'),
-        'HOST': os.getenv('DB_HOST', 'localhost'),
-        'PORT': os.getenv('DB_PORT', '5432'),
-    }
+    'default': dj_database_url.config(
+        default=os.getenv('DATABASE_URL', f'sqlite:///{BASE_DIR / "db.sqlite3"}'),
+        conn_max_age=600,
+        ssl_require=_env_bool('DB_SSL_REQUIRE', not DEBUG),
+    )
 }
 
 
@@ -139,7 +153,8 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
@@ -147,30 +162,37 @@ STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 CORS_ALLOW_CREDENTIALS = True
 
-# Frontend dev origins (Vite defaults to 5173)
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:5174",
-    "http://127.0.0.1:5174",
-]
+default_frontend_origins = (
+    'http://localhost:3000,'
+    'http://127.0.0.1:3000,'
+    'http://localhost:5173,'
+    'http://127.0.0.1:5173,'
+    'http://localhost:5174,'
+    'http://127.0.0.1:5174'
+)
 
-CSRF_TRUSTED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:5174",
-    "http://127.0.0.1:5174",
-]
+CORS_ALLOWED_ORIGINS = _csv_env('CORS_ALLOWED_ORIGINS', default_frontend_origins)
 
-SESSION_COOKIE_SECURE = False  # Set to True in production with HTTPS
+frontend_url = os.getenv('FRONTEND_URL', '').strip()
+if frontend_url and frontend_url not in CORS_ALLOWED_ORIGINS:
+    CORS_ALLOWED_ORIGINS.append(frontend_url)
+
+default_csrf_origins = f'{default_frontend_origins},https://*.vercel.app'
+CSRF_TRUSTED_ORIGINS = _csv_env('CSRF_TRUSTED_ORIGINS', default_csrf_origins)
+
+if frontend_url and frontend_url not in CSRF_TRUSTED_ORIGINS:
+    CSRF_TRUSTED_ORIGINS.append(frontend_url)
+
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    USE_X_FORWARDED_HOST = True
+    SECURE_SSL_REDIRECT = _env_bool('SECURE_SSL_REDIRECT', True)
+
+SESSION_COOKIE_SECURE = not DEBUG
 SESSION_COOKIE_SAMESITE = 'Lax'  # Recommended for better security
 SESSION_COOKIE_AGE = 86400  # 24 hours in seconds
 
-CSRF_COOKIE_SECURE = False  # Set to True in production with HTTPS
+CSRF_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SAMESITE = 'Lax'
 CSRF_COOKIE_AGE = 86400  # 24 hours in seconds
 CSRF_COOKIE_HTTPONLY = False  # Allow JavaScript to read CSRF cookie
