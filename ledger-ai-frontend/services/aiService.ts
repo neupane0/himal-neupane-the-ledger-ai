@@ -1,14 +1,4 @@
-import axios from 'axios';
-
-const API_BASE_URL = 'http://localhost:8000/api';
-
-// Helper to get CSRF token from cookie
-const getCsrfToken = (): string => {
-  const value = `; ${document.cookie}`;
-  const parts = value.split(`; csrftoken=`);
-  if (parts.length === 2) return parts.pop()?.split(';').shift() || '';
-  return '';
-};
+import api from './api';
 
 /**
  * AI Service - Uses backend FinBERT + spaCy instead of Gemini
@@ -16,13 +6,8 @@ const getCsrfToken = (): string => {
 
 export const categorizeTransaction = async (description: string): Promise<string> => {
   try {
-    const response = await axios.post(`${API_BASE_URL}/ai/categorize/`, {
+    const response = await api.post('/ai/categorize/', {
       text: description
-    }, {
-      withCredentials: true,
-      headers: {
-        'X-CSRFToken': getCsrfToken(),
-      }
     });
     return response.data.category || 'Uncategorized';
   } catch (error) {
@@ -33,13 +18,8 @@ export const categorizeTransaction = async (description: string): Promise<string
 
 export const parseVoiceLog = async (transcript: string): Promise<any> => {
   try {
-    const response = await axios.post(`${API_BASE_URL}/ai/parse-voice/`, {
+    const response = await api.post('/ai/parse-voice/', {
       transcript: transcript
-    }, {
-      withCredentials: true,
-      headers: {
-        'X-CSRFToken': getCsrfToken(),
-      }
     });
     return response.data;
   } catch (error) {
@@ -54,12 +34,7 @@ export const parseReceipt = async (file: File): Promise<any> => {
     const formData = new FormData();
     formData.append('file', file);
 
-    const response = await axios.post(`${API_BASE_URL}/upload-receipt/`, formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-      withCredentials: true
-    });
+    const response = await api.post('/upload-receipt/', formData);
 
     return response.data;
   } catch (error) {

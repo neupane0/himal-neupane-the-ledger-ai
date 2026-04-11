@@ -58,11 +58,19 @@ const readCookie = (name: string): string => {
   return (parts.length === 2 ? parts.pop()?.split(';').shift() : '') || '';
 };
 
+// In cross-origin deployments (Vercel → Render), JavaScript cannot read
+// cookies set for a different domain. We store the CSRF token returned in
+// the response body so the interceptor can always attach it.
+let _csrfToken = '';
+
 // Fetch the CSRF cookie from Django on startup so the very first unsafe
 // request already has a token available.
 const initCsrf = async (): Promise<void> => {
   try {
-    await api.get('/auth/csrf/');
+    const res = await api.get('/auth/csrf/');
+    if (res.data?.csrfToken) {
+      _csrfToken = res.data.csrfToken;
+    }
   } catch (error) {
     console.error('Failed to fetch CSRF cookie', error);
   }
@@ -79,9 +87,11 @@ api.interceptors.request.use(
     const method = (config.method ?? 'get').toLowerCase();
     const needsCsrf = !['get', 'head', 'options', 'trace'].includes(method);
 
-    // Attach the CSRF token from the cookie for every unsafe request.
+    // Attach the CSRF token for every unsafe request.
+    // Try reading from cookie first (works same-origin / dev),
+    // then fall back to the token stored from the /auth/csrf/ response body.
     if (needsCsrf) {
-      const token = readCookie('csrftoken');
+      const token = readCookie('csrftoken') || _csrfToken;
       if (token) {
         config.headers.set('X-CSRFToken', token);
       }
