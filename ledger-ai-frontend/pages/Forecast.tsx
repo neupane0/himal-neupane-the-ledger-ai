@@ -253,8 +253,7 @@ const Forecast: React.FC = () => {
 
                 <Tooltip
                   contentStyle={{ borderRadius: 12, border: 'none', boxShadow: '0 8px 30px -5px rgba(0,0,0,0.12)', fontSize: 12 }}
-                  formatter={(value: number | null, name: string) => {
-                    if (value == null) return ['-', name];
+                  formatter={(value, name) => {
                     const labels: Record<string, string> = {
                       actual: 'Actual',
                       predicted: 'Ensemble',
@@ -264,7 +263,10 @@ const Forecast: React.FC = () => {
                       confidence_upper: 'P90 Upper',
                       confidence_lower: 'P10 Lower',
                     };
-                    return [`$${value.toLocaleString()}`, labels[name] || name];
+                    const label = labels[String(name)] || String(name);
+                    if (value == null) return ['-', label];
+                    const num = typeof value === 'number' ? value : Number(value);
+                    return [`$${num.toLocaleString()}`, label];
                   }}
                   cursor={{ stroke: '#e4e4e7', strokeWidth: 1 }}
                 />
