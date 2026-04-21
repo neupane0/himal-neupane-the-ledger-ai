@@ -8,14 +8,99 @@ from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.models import User
 from django.views.decorators.csrf import ensure_csrf_cookie, csrf_exempt
 from django.utils.decorators import method_decorator
-from .models import Transaction, IncomeSource, AssistantConversation, AssistantMessage, Budget, Reminder, RecurringTransaction, UserProfile
-from .serializers import TransactionSerializer, UserSerializer, IncomeSourceSerializer, BudgetSerializer, ReminderSerializer, RecurringTransactionSerializer, UserProfileSerializer
+from .models import Transaction, IncomeSource, AssistantConversation, AssistantMessage, Budget, Reminder, RecurringTransaction, UserProfile, Group, GroupMembership, GroupExpense, GroupPayment, PasswordResetOTP
+from .serializers import TransactionSerializer, UserSerializer, IncomeSourceSerializer, BudgetSerializer, ReminderSerializer, RecurringTransactionSerializer, UserProfileSerializer, GroupSerializer, GroupListSerializer, GroupExpenseSerializer
 
 
 def _get_or_create_profile(user):
     """Get or auto-create a UserProfile for the given user."""
     profile, _ = UserProfile.objects.get_or_create(user=user)
     return profile
+
+
+def _check_budget_alerts(user):
+    """
+    After any transaction change, recalculate spend for each active budget
+    and send 90%/100% alert emails if thresholds are newly crossed.
+    Resets alert flags if spending drops back below the threshold.
+    """
+    from datetime import date
+    from django.db.models import Sum
+    from .email_service import send_budget_alert_email
+
+    today = date.today()
+    current_month_start = today.replace(day=1)
+
+    budgets = Budget.objects.filter(owner=user, month=current_month_start)
+
+    for budget in budgets:
+        limit = float(budget.limit_amount)
+        if limit <= 0:
+            continue
+
+        first_day = budget.month.replace(day=1)
+        if first_day.month == 12:
+            last_day = first_day.replace(year=first_day.year + 1, month=1, day=1)
+        else:
+            last_day = first_day.replace(month=first_day.month + 1, day=1)
+
+        total = Transaction.objects.filter(
+            owner=user,
+            category__iexact=budget.category,
+            date__gte=first_day,
+            date__lt=last_day,
+        ).exclude(
+            models.Q(category__iexact='income') | models.Q(category__iexact='savings')
+        ).aggregate(total=Sum('amount'))['total']
+
+        spent = float(total) if total else 0.0
+        percent = int((spent / limit) * 100)
+
+        changed = False
+
+        # Reset flags if spending has dropped back below thresholds
+        if percent < 90 and (budget.alert_90_sent or budget.alert_100_sent):
+            budget.alert_90_sent = False
+            budget.alert_100_sent = False
+            changed = True
+        elif percent < 100 and budget.alert_100_sent:
+            budget.alert_100_sent = False
+            changed = True
+
+        # Send 90% alert
+        if percent >= 90 and not budget.alert_90_sent:
+            try:
+                send_budget_alert_email(
+                    to_email=user.email,
+                    username=user.username,
+                    category=budget.category,
+                    spent=spent,
+                    limit=limit,
+                    percent=percent,
+                )
+            except Exception:
+                pass
+            budget.alert_90_sent = True
+            changed = True
+
+        # Send 100% alert
+        if percent >= 100 and not budget.alert_100_sent:
+            try:
+                send_budget_alert_email(
+                    to_email=user.email,
+                    username=user.username,
+                    category=budget.category,
+                    spent=spent,
+                    limit=limit,
+                    percent=percent,
+                )
+            except Exception:
+                pass
+            budget.alert_100_sent = True
+            changed = True
+
+        if changed:
+            budget.save(update_fields=['alert_90_sent', 'alert_100_sent'])
 
 
 @api_view(['GET'])
@@ -37,6 +122,15 @@ class TransactionViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
+        _check_budget_alerts(self.request.user)
+
+    def perform_update(self, serializer):
+        serializer.save()
+        _check_budget_alerts(self.request.user)
+
+    def perform_destroy(self, instance):
+        instance.delete()
+        _check_budget_alerts(self.request.user)
 
 
 class IncomeSourceViewSet(viewsets.ModelViewSet):
@@ -75,6 +169,13 @@ class BudgetViewSet(viewsets.ModelViewSet):
         if month:
             serializer.validated_data['month'] = month.replace(day=1)
         serializer.save(owner=self.request.user)
+
+    def perform_update(self, serializer):
+        # Reset alert flags when the limit changes so alerts fire again
+        if 'limit_amount' in serializer.validated_data:
+            serializer.save(alert_90_sent=False, alert_100_sent=False)
+        else:
+            serializer.save()
 
 
 class ReminderViewSet(viewsets.ModelViewSet):
@@ -412,57 +513,79 @@ def disable_2fa(request):
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
 def forecast_insights(request):
-    """Return a short AI insight for spending trend data using local Ollama."""
+    """Return a spending insight. Uses rule-based logic by default; Ollama when enabled."""
     from .ai_service import _env_flag, _ollama_chat_json
     import json
+    from datetime import date
 
-    spending_data = request.data.get('spendingData')
-    if spending_data is None:
-        return Response({'error': 'spendingData is required'}, status=status.HTTP_400_BAD_REQUEST)
+    spending_data = request.data.get('spendingData', [])
 
-    if not _env_flag("LEDGER_AI_USE_OLLAMA", default=False):
-        return Response(
-            {
-                'insight': 'Local AI is disabled. Set LEDGER_AI_USE_OLLAMA=true to enable insights.',
-                'ollama_used': False,
-            },
-            status=status.HTTP_200_OK,
+    # ── Rule-based insight (always available) ─────────────────────────────────
+    def rule_based_insight(data, user):
+        """Generate a meaningful insight from real transaction data."""
+        from django.db.models import Sum
+        from core.models import Transaction
+
+        now = date.today()
+        from django.db.models import Q
+        txs = Transaction.objects.filter(
+            owner=user,
+            date__year=now.year,
+            date__month=now.month,
+        ).exclude(Q(category__iexact='income') | Q(category__iexact='savings'))
+
+        total_spent = float(txs.aggregate(s=Sum('amount'))['s'] or 0)
+        days_passed = now.day
+        days_in_month = 30
+
+        if total_spent == 0:
+            return "No expenses recorded this month yet — great start!"
+
+        daily_avg = total_spent / days_passed
+        projected = daily_avg * days_in_month
+
+        # Top category
+        from django.db.models import Sum as S
+        cat_totals = (
+            txs.values('category')
+            .annotate(total=S('amount'))
+            .order_by('-total')
         )
+        top_cat = cat_totals.first()
+        top_cat_str = f" Your biggest spending category is {top_cat['category']} (${float(top_cat['total']):.0f})." if top_cat else ""
 
-    system = (
-        "You are a personal finance assistant. "
-        "Given daily expense totals for the current month, write ONE short insight in <= 2 sentences. "
-        "Be specific but avoid assumptions about income. "
-        "Return ONLY strict JSON with key: insight (string)."
-    )
-    user = {
-        "spending_trend": spending_data,
-        "output_schema": {"insight": "string"},
-    }
+        # Spending pace message
+        if daily_avg < 30:
+            pace = "Your spending pace is very low this month — well done!"
+        elif daily_avg < 60:
+            pace = f"You're averaging ${daily_avg:.0f}/day — on track for a reasonable month."
+        else:
+            pace = f"You're averaging ${daily_avg:.0f}/day. At this pace, you'll spend ~${projected:.0f} this month."
 
-    result = _ollama_chat_json(
-        [
+        return f"{pace}{top_cat_str}"
+
+    # ── Try Ollama if enabled ─────────────────────────────────────────────────
+    if _env_flag("LEDGER_AI_USE_OLLAMA", default=False) and spending_data:
+        system = (
+            "You are a personal finance assistant. "
+            "Given daily expense totals for the current month, write ONE short insight in <= 2 sentences. "
+            "Be specific but avoid assumptions about income. "
+            "Return ONLY strict JSON with key: insight (string)."
+        )
+        user_msg = {
+            "spending_trend": spending_data,
+            "output_schema": {"insight": "string"},
+        }
+        result = _ollama_chat_json([
             {"role": "system", "content": system},
-            {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
-        ]
-    )
+            {"role": "user", "content": json.dumps(user_msg, ensure_ascii=False)},
+        ])
+        if isinstance(result, dict) and isinstance(result.get('insight'), str) and result['insight'].strip():
+            return Response({'insight': result['insight'].strip(), 'ollama_used': True})
 
-    if not isinstance(result, dict) or not isinstance(result.get('insight'), str) or not result.get('insight').strip():
-        return Response(
-            {
-                'insight': 'Unable to generate insights at this time.',
-                'ollama_used': True,
-            },
-            status=status.HTTP_200_OK,
-        )
-
-    return Response(
-        {
-            'insight': result['insight'].strip(),
-            'ollama_used': True,
-        },
-        status=status.HTTP_200_OK,
-    )
+    # ── Fallback: rule-based insight ─────────────────────────────────────────
+    insight_text = rule_based_insight(spending_data, request.user)
+    return Response({'insight': insight_text, 'ollama_used': False})
 
 
 @api_view(['GET'])
@@ -1458,4 +1581,363 @@ def ai_budget_suggestions(request):
             'total_income': total_income if total_income > 0 else None,
             'message': overall_msg,
         }
+    })
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def ai_recurring_suggestions(request):
+    """
+    Suggest recurring transactions based on patterns in the user's transaction history.
+    Detects expenses that appear regularly (same title/category, consistent amount, consistent interval).
+    Skips items already set up as recurring rules.
+    """
+    from datetime import date
+    from dateutil.relativedelta import relativedelta
+    from collections import defaultdict
+
+    user = request.user
+    today = date.today()
+    lookback_start = today - relativedelta(months=6)
+
+    transactions = Transaction.objects.filter(
+        owner=user,
+        date__gte=lookback_start,
+        date__lte=today,
+    ).exclude(category__iexact='Income').order_by('title', 'date')
+
+    if not transactions.exists():
+        return Response({'suggestions': [], 'summary': 'Not enough transaction history to detect patterns.'})
+
+    # Get existing recurring rule titles (normalised) to avoid duplicates
+    existing_titles = set(
+        RecurringTransaction.objects.filter(owner=user)
+        .values_list('title', flat=True)
+    )
+    existing_lower = {t.lower() for t in existing_titles}
+
+    # Group transactions by normalised title
+    title_groups = defaultdict(list)
+    for txn in transactions:
+        key = txn.title.strip().lower()
+        title_groups[key].append(txn)
+
+    suggestions = []
+
+    for norm_title, txns in title_groups.items():
+        if len(txns) < 2:
+            continue
+        if norm_title in existing_lower:
+            continue
+
+        txns_sorted = sorted(txns, key=lambda t: t.date)
+        amounts = [float(t.amount) for t in txns_sorted]
+        avg_amount = sum(amounts) / len(amounts)
+        amount_variance = max(amounts) - min(amounts)
+        amount_consistent = amount_variance / avg_amount < 0.15 if avg_amount > 0 else False
+
+        # Detect interval between occurrences
+        gaps = []
+        for i in range(1, len(txns_sorted)):
+            delta = (txns_sorted[i].date - txns_sorted[i - 1].date).days
+            gaps.append(delta)
+
+        avg_gap = sum(gaps) / len(gaps) if gaps else 0
+
+        # Map gap to frequency
+        if 25 <= avg_gap <= 35:
+            frequency = 'monthly'
+            freq_label = 'Monthly'
+        elif 6 <= avg_gap <= 8:
+            frequency = 'weekly'
+            freq_label = 'Weekly'
+        elif 12 <= avg_gap <= 16:
+            frequency = 'biweekly'
+            freq_label = 'Bi-weekly'
+        elif 360 <= avg_gap <= 370:
+            frequency = 'yearly'
+            freq_label = 'Yearly'
+        elif 1 <= avg_gap <= 2:
+            frequency = 'daily'
+            freq_label = 'Daily'
+        else:
+            continue  # No recognisable pattern
+
+        # Consistency of interval
+        if len(gaps) >= 2:
+            gap_variance = max(gaps) - min(gaps)
+            interval_consistent = gap_variance / avg_gap < 0.3 if avg_gap > 0 else False
+        else:
+            interval_consistent = True
+
+        if not interval_consistent:
+            continue
+
+        representative = txns_sorted[-1]
+        category = representative.category or 'Uncategorized'
+
+        reason_parts = [f"Appeared {len(txns)} times in the last 6 months."]
+        if amount_consistent:
+            reason_parts.append(f"Consistent amount (~${avg_amount:.2f}).")
+        else:
+            reason_parts.append(f"Amount varies (avg ${avg_amount:.2f}).")
+        reason_parts.append(f"{freq_label} pattern detected.")
+
+        suggestions.append({
+            'title': representative.title.strip(),
+            'amount': round(avg_amount, 2),
+            'category': category,
+            'frequency': frequency,
+            'occurrences': len(txns),
+            'reason': ' '.join(reason_parts),
+        })
+
+    suggestions.sort(key=lambda s: s['occurrences'], reverse=True)
+
+    summary = (
+        f"Found {len(suggestions)} recurring pattern(s) in your last 6 months of transactions."
+        if suggestions else
+        "No clear recurring patterns detected yet. Keep tracking expenses and check back later."
+    )
+
+    return Response({'suggestions': suggestions, 'summary': summary})
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# OTP Password Recovery
+# ──────────────────────────────────────────────────────────────────────────────
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def forgot_password(request):
+    """Send a 6-digit OTP to the user's registered email."""
+    import random
+    from django.utils import timezone
+    from datetime import timedelta
+    from .email_service import send_otp_email
+
+    email = (request.data.get('email') or '').strip()
+    if not email:
+        return Response({'error': 'Email is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    user = User.objects.filter(email__iexact=email).first()
+    # Always return success to avoid user enumeration
+    if user:
+        # Invalidate previous OTPs for this user
+        PasswordResetOTP.objects.filter(user=user, is_used=False).update(is_used=True)
+
+        otp_code = f"{random.randint(100000, 999999)}"
+        expires_at = timezone.now() + timedelta(minutes=10)
+        PasswordResetOTP.objects.create(user=user, otp_code=otp_code, expires_at=expires_at)
+        send_otp_email(to_email=user.email, username=user.username, otp_code=otp_code)
+
+    return Response({'message': 'If an account with that email exists, an OTP has been sent.'})
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def verify_reset_otp(request):
+    """Verify the OTP code without resetting the password yet."""
+    email = (request.data.get('email') or '').strip()
+    otp_code = (request.data.get('otp') or '').strip()
+
+    if not email or not otp_code:
+        return Response({'error': 'Email and OTP are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    user = User.objects.filter(email__iexact=email).first()
+    if not user:
+        return Response({'error': 'Invalid OTP or email.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    otp_obj = PasswordResetOTP.objects.filter(user=user, otp_code=otp_code, is_used=False).first()
+    if not otp_obj or not otp_obj.is_valid():
+        return Response({'error': 'Invalid or expired OTP.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response({'message': 'OTP verified. You may now reset your password.'})
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def reset_password(request):
+    """Reset password using a valid OTP code."""
+    email = (request.data.get('email') or '').strip()
+    otp_code = (request.data.get('otp') or '').strip()
+    new_password = (request.data.get('new_password') or '').strip()
+
+    if not email or not otp_code or not new_password:
+        return Response({'error': 'Email, OTP, and new password are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if len(new_password) < 8:
+        return Response({'error': 'Password must be at least 8 characters.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    user = User.objects.filter(email__iexact=email).first()
+    if not user:
+        return Response({'error': 'Invalid OTP or email.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    otp_obj = PasswordResetOTP.objects.filter(user=user, otp_code=otp_code, is_used=False).first()
+    if not otp_obj or not otp_obj.is_valid():
+        return Response({'error': 'Invalid or expired OTP.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    user.set_password(new_password)
+    user.save()
+    otp_obj.is_used = True
+    otp_obj.save()
+
+    return Response({'message': 'Password reset successfully. You can now log in.'})
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Groups
+# ──────────────────────────────────────────────────────────────────────────────
+
+class GroupViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return GroupListSerializer
+        return GroupSerializer
+
+    def get_queryset(self):
+        return Group.objects.filter(memberships__user=self.request.user).prefetch_related(
+            'memberships__user__profile', 'expenses__paid_by', 'payments__paid_by', 'payments__paid_to'
+        ).distinct()
+
+    def perform_create(self, serializer):
+        group = serializer.save(created_by=self.request.user)
+        GroupMembership.objects.get_or_create(group=group, user=self.request.user)
+
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        ctx['request'] = self.request
+        return ctx
+
+    @action(detail=True, methods=['post'], url_path='invite')
+    def invite_member(self, request, pk=None):
+        group = self.get_object()
+        email = (request.data.get('email') or '').strip()
+        if not email:
+            return Response({'error': 'Email is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        invited_user = User.objects.filter(email__iexact=email).first()
+        if not invited_user:
+            return Response({'error': 'No user found with that email.'}, status=status.HTTP_404_NOT_FOUND)
+        _, created = GroupMembership.objects.get_or_create(group=group, user=invited_user)
+        if not created:
+            return Response({'error': 'User is already a member.'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'message': f'{invited_user.username} added to {group.name}.'})
+
+    @action(detail=True, methods=['post'], url_path='add-expense')
+    def add_expense(self, request, pk=None):
+        """Add an expense to the group."""
+        group = self.get_object()
+        serializer = GroupExpenseSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        expense = serializer.save(group=group, paid_by=request.user)
+        return Response(GroupExpenseSerializer(expense).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='record-payment')
+    def record_payment(self, request, pk=None):
+        """Debtor records that they have paid the creditor."""
+        group = self.get_object()
+        to_username = (request.data.get('to') or '').strip()
+        amount = request.data.get('amount')
+        note = (request.data.get('note') or '').strip()
+
+        if not to_username or not amount:
+            return Response({'error': 'to and amount are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        paid_to = User.objects.filter(username=to_username).first()
+        if not paid_to:
+            return Response({'error': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Remove any previous unconfirmed payment between these two in this group
+        GroupPayment.objects.filter(
+            group=group, paid_by=request.user, paid_to=paid_to, is_confirmed=False
+        ).delete()
+
+        payment = GroupPayment.objects.create(
+            group=group,
+            paid_by=request.user,
+            paid_to=paid_to,
+            amount=amount,
+            note=note,
+        )
+        return Response({
+            'message': f'Payment of ${amount} to {to_username} recorded. Waiting for confirmation.',
+            'payment_id': payment.id,
+        }, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='confirm-payment')
+    def confirm_payment(self, request, pk=None):
+        """Creditor confirms they received payment."""
+        from django.utils import timezone
+        group = self.get_object()
+        payment_id = request.data.get('payment_id')
+        if not payment_id:
+            return Response({'error': 'payment_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        payment = GroupPayment.objects.filter(id=payment_id, group=group, paid_to=request.user, is_confirmed=False).first()
+        if not payment:
+            return Response({'error': 'Payment not found or already confirmed.'}, status=status.HTTP_404_NOT_FOUND)
+
+        payment.is_confirmed = True
+        payment.confirmed_at = timezone.now()
+        payment.save()
+        return Response({'message': 'Payment confirmed. Balances updated.'})
+
+    @action(detail=True, methods=['post'], url_path='request-payment-info')
+    def request_payment_info(self, request, pk=None):
+        """Send an email to a group member asking them to add payment info."""
+        from .email_service import send_payment_info_request_email
+        group = self.get_object()
+        to_username = (request.data.get('username') or '').strip()
+        if not to_username:
+            return Response({'error': 'username is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        target = User.objects.filter(username=to_username).first()
+        if not target or not target.email:
+            return Response({'error': 'User not found or has no email.'}, status=status.HTTP_404_NOT_FOUND)
+
+        send_payment_info_request_email(
+            to_email=target.email,
+            to_username=target.username,
+            from_username=request.user.username,
+            group_name=group.name,
+        )
+        return Response({'message': f'Payment info request sent to {target.username}.'})
+
+
+# ── Standalone expense delete (avoids DRF regex action URL conflicts) ─────────
+
+@api_view(['DELETE'])
+@permission_classes([permissions.IsAuthenticated])
+def delete_group_expense(request, group_id, expense_id):
+    group = Group.objects.filter(id=group_id, memberships__user=request.user).first()
+    if not group:
+        return Response({'error': 'Group not found.'}, status=status.HTTP_404_NOT_FOUND)
+    expense = GroupExpense.objects.filter(id=expense_id, group=group).first()
+    if not expense:
+        return Response({'error': 'Expense not found.'}, status=status.HTTP_404_NOT_FOUND)
+    if expense.paid_by != request.user and group.created_by != request.user:
+        return Response({'error': 'Permission denied.'}, status=status.HTTP_403_FORBIDDEN)
+    expense.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ── Payment info update ───────────────────────────────────────────────────────
+
+@api_view(['PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def update_payment_info(request):
+    """Update the current user's eSewa ID and bank account details."""
+    profile = _get_or_create_profile(request.user)
+    for field in ('esewa_id', 'bank_name', 'bank_account_number'):
+        val = request.data.get(field)
+        if val is not None:
+            setattr(profile, field, val)
+    profile.save()
+    return Response({
+        'message': 'Payment info updated.',
+        'esewa_id': profile.esewa_id,
+        'bank_name': profile.bank_name,
+        'bank_account_number': profile.bank_account_number,
     })

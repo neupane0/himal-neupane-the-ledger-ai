@@ -86,20 +86,84 @@ export interface UserProfile {
   last_name: string;
   date_joined: string;
   is_2fa_enabled: boolean;
+  esewa_id: string;
+  bank_name: string;
+  bank_account_number: string;
 }
 
 export interface Group {
-  id: string;
+  id: number;
   name: string;
-  members: number;
-  owe: number;
-  owed: number;
+  member_count: number;
+  expense_count?: number;
+  /** Positive = you owe; negative = you are owed */
+  your_balance: number;
+  members?: GroupMember[];
+  expenses?: GroupExpense[];
+  settlements?: GroupSettlement[];
+  confirmed_payments?: GroupConfirmedPayment[];
+  created_at: string;
+}
+
+export interface GroupConfirmedPayment {
+  id: number;
+  from: string;
+  to: string;
+  amount: number;
+  note: string;
+  confirmed_at: string | null;
 }
 
 export interface GroupMember {
-  name: string;
+  id: number;
+  username: string;
   email: string;
-  avatar?: string;
+  joined_at: string;
+}
+
+export interface GroupSplitDetail {
+  username: string;
+  share: number;
+  paid: boolean;
+}
+
+export interface GroupPaymentInfo {
+  esewa_id: string;
+  bank_name: string;
+  bank_account_number: string;
+  has_info: boolean;
+}
+
+export interface GroupSettlement {
+  from: string;
+  to: string;
+  amount: number;
+  to_payment_info: GroupPaymentInfo;
+  pending_payment: { id: number; amount: number; note: string } | null;
+}
+
+export interface GroupExpense {
+  id: number;
+  group: number;
+  title: string;
+  amount: string;
+  paid_by_username: string;
+  date: string;
+  notes: string;
+  share_per_member: number;
+  split_details: GroupSplitDetail[];
+  created_at: string;
+}
+
+export interface GroupCreateRequest {
+  name: string;
+}
+
+export interface GroupExpenseCreateRequest {
+  title: string;
+  amount: number;
+  date: string;
+  notes?: string;
 }
 
 // ──────────────────────────────────────────────
@@ -322,9 +386,35 @@ export interface AssistantSendResponse {
 export interface BudgetSuggestionsResponse {
   suggestions: Array<{
     category: string;
-    suggested_amount: number;
-    reason: string;
+    suggested_limit: number;
+    avg_spending: number;
+    max_spending: number;
+    min_spending: number;
+    trend: 'increasing' | 'decreasing' | 'stable';
+    trend_percentage: number;
+    confidence: 'high' | 'medium' | 'low';
+    reasoning: string;
+    months_with_data: number;
   }>;
+  summary: {
+    total_suggested: number;
+    months_analyzed: number;
+    total_income: number | null;
+    message: string;
+  };
+}
+
+export interface RecurringSuggestion {
+  title: string;
+  amount: number;
+  category: string;
+  frequency: string;
+  occurrences: number;
+  reason: string;
+}
+
+export interface RecurringSuggestionsResponse {
+  suggestions: RecurringSuggestion[];
   summary: string;
 }
 
@@ -355,4 +445,5 @@ export enum AppRoute {
   RECURRING = '/recurring',
   PROFILE = '/profile',
   CATEGORY_ANALYTICS = '/categories',
+  FORGOT_PASSWORD = '/forgot-password',
 }

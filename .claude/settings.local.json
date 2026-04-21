@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python manage.py migrate)",
+      "Bash(python manage.py check)",
+      "Bash(python manage.py shell -c \"from django.contrib.auth.models import User; u = User.objects.filter\\(email='neupanehimal717@gmail.com'\\).first\\(\\); print\\(u, u.id if u else 'NOT FOUND'\\)\")",
+      "Bash(python manage.py shell -c ':*)",
+      "Bash(python manage.py makemigrations core)",
+      "Bash(.venv/Scripts/python manage.py makemigrations core --name budget_alert_flags)",
+      "Bash(.venv/Scripts/python manage.py migrate)",
+      "Bash(npx tsc *)",
+      "Bash(./node_modules/.bin/tsc --noEmit)",
+      "Bash(node node_modules/typescript/bin/tsc --noEmit)",
+      "Bash(node node_modules/typescript/bin/tsc --noEmit --pretty false)",
+      "Bash(node node_modules/typescript/bin/tsc --noEmit --listFiles)"
+    ]
+  }
+}

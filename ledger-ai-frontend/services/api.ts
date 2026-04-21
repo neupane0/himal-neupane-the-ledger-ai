@@ -13,6 +13,7 @@ import type {
   BudgetCreateRequest,
   BudgetUpdateRequest,
   BudgetSuggestionsResponse,
+  RecurringSuggestionsResponse,
   Reminder,
   ReminderCreateRequest,
   ReminderUpdateRequest,
@@ -31,6 +32,9 @@ import type {
   TwoFAVerifyResponse,
   ChangePasswordRequest,
   ProfileUpdateRequest,
+  Group,
+  GroupExpense,
+  GroupExpenseCreateRequest,
 } from '../types';
 
 // ---------------------------------------------------------------------------
@@ -159,10 +163,11 @@ export const budgets = {
 };
 
 export const ai = {
-  forecastInsights: (spendingData: SpendingDataPoint[]): Promise<AxiosResponse<ForecastInsightResponse>>   => api.post('/ai/forecast-insights/', { spendingData }),
-  forecast:         ():                                  Promise<AxiosResponse<ForecastResponse>>           => api.get('/ai/forecast/'),
-  assistantHistory: ():                                  Promise<AxiosResponse<AssistantHistoryResponse>>   => api.get('/ai/assistant/history/'),
-  assistantSend:    (message: string):                   Promise<AxiosResponse<AssistantSendResponse>>      => api.post('/ai/assistant/send/', { message }),
+  forecastInsights:     (spendingData: SpendingDataPoint[]): Promise<AxiosResponse<ForecastInsightResponse>>     => api.post('/ai/forecast-insights/', { spendingData }),
+  forecast:             ():                                  Promise<AxiosResponse<ForecastResponse>>             => api.get('/ai/forecast/'),
+  assistantHistory:     ():                                  Promise<AxiosResponse<AssistantHistoryResponse>>     => api.get('/ai/assistant/history/'),
+  assistantSend:        (message: string):                   Promise<AxiosResponse<AssistantSendResponse>>        => api.post('/ai/assistant/send/', { message }),
+  recurringSuggestions: ():                                  Promise<AxiosResponse<RecurringSuggestionsResponse>> => api.get('/ai/recurring-suggestions/'),
 };
 
 export const reminders = {
@@ -172,6 +177,29 @@ export const reminders = {
   delete:        (id: number):                               Promise<AxiosResponse<void>>                  => api.delete(`/reminders/${id}/`),
   togglePaid:    (id: number):                               Promise<AxiosResponse<Reminder>>              => api.post(`/reminders/${id}/toggle_paid/`),
   sendTestEmail: ():                                         Promise<AxiosResponse<{ message: string }>>   => api.post('/reminders/send_test_email/'),
+};
+
+export const passwordReset = {
+  forgotPassword:   (email: string):                               Promise<AxiosResponse<{ message: string }>> => api.post('/auth/forgot-password/', { email }),
+  verifyOtp:        (email: string, otp: string):                  Promise<AxiosResponse<{ message: string }>> => api.post('/auth/verify-reset-otp/', { email, otp }),
+  resetPassword:    (email: string, otp: string, new_password: string): Promise<AxiosResponse<{ message: string }>> => api.post('/auth/reset-password/', { email, otp, new_password }),
+};
+
+export const groups = {
+  getAll:              ():                                                    Promise<AxiosResponse<Group[]>>           => api.get('/groups/'),
+  get:                 (id: number):                                          Promise<AxiosResponse<Group>>             => api.get(`/groups/${id}/`),
+  create:              (name: string):                                        Promise<AxiosResponse<Group>>             => api.post('/groups/', { name }),
+  delete:              (id: number):                                          Promise<AxiosResponse<void>>              => api.delete(`/groups/${id}/`),
+  inviteMember:        (id: number, email: string):                           Promise<AxiosResponse<{ message: string }>> => api.post(`/groups/${id}/invite/`, { email }),
+  addExpense:          (id: number, data: GroupExpenseCreateRequest):          Promise<AxiosResponse<GroupExpense>>      => api.post(`/groups/${id}/add-expense/`, data),
+  deleteExpense:       (groupId: number, expenseId: number):                  Promise<AxiosResponse<void>>              => api.delete(`/groups/${groupId}/expenses/${expenseId}/delete/`),
+  recordPayment:       (id: number, to: string, amount: number, note?: string): Promise<AxiosResponse<{ message: string; payment_id: number }>> => api.post(`/groups/${id}/record-payment/`, { to, amount, note }),
+  confirmPayment:      (id: number, payment_id: number):                      Promise<AxiosResponse<{ message: string }>> => api.post(`/groups/${id}/confirm-payment/`, { payment_id }),
+  requestPaymentInfo:  (id: number, username: string):                        Promise<AxiosResponse<{ message: string }>> => api.post(`/groups/${id}/request-payment-info/`, { username }),
+};
+
+export const paymentInfo = {
+  update: (data: { esewa_id?: string; bank_name?: string; bank_account_number?: string }): Promise<AxiosResponse<{ message: string }>> => api.patch('/auth/payment-info/', data),
 };
 
 export const recurringTransactions = {

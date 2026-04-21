@@ -9,6 +9,7 @@ from .views import (
     BudgetViewSet,
     ReminderViewSet,
     RecurringTransactionViewSet,
+    GroupViewSet,
     register,
     login_view,
     verify_2fa_login,
@@ -19,6 +20,11 @@ from .views import (
     setup_2fa,
     verify_2fa,
     disable_2fa,
+    forgot_password,
+    verify_reset_otp,
+    reset_password,
+    update_payment_info,
+    delete_group_expense,
     ReceiptUploadView,
     ExportTransactionsView,
     ImportTransactionsView,
@@ -32,7 +38,8 @@ from .views import (
     assistant_history,
     assistant_send,
     debug_ocr_text,
-    ai_budget_suggestions
+    ai_budget_suggestions,
+    ai_recurring_suggestions,
 )
 
 router = routers.DefaultRouter()
@@ -41,6 +48,7 @@ router.register(r'income-sources', IncomeSourceViewSet, basename='income-source'
 router.register(r'budgets', BudgetViewSet, basename='budget')
 router.register(r'reminders', ReminderViewSet, basename='reminder')
 router.register(r'recurring-transactions', RecurringTransactionViewSet, basename='recurring-transaction')
+router.register(r'groups', GroupViewSet, basename='group')
 
 @require_http_methods(['GET'])
 @ensure_csrf_cookie
@@ -61,6 +69,11 @@ urlpatterns = [
     path('auth/2fa/setup/', setup_2fa, name='setup_2fa'),
     path('auth/2fa/verify/', verify_2fa, name='verify_2fa'),
     path('auth/2fa/disable/', disable_2fa, name='disable_2fa'),
+    path('auth/forgot-password/', forgot_password, name='forgot_password'),
+    path('auth/verify-reset-otp/', verify_reset_otp, name='verify_reset_otp'),
+    path('auth/reset-password/', reset_password, name='reset_password'),
+    path('auth/payment-info/', update_payment_info, name='update_payment_info'),
+    path('groups/<int:group_id>/expenses/<int:expense_id>/delete/', delete_group_expense, name='delete_group_expense'),
     path('upload-receipt/', ReceiptUploadView.as_view(), name='upload_receipt'),
     path('transactions/export/', ExportTransactionsView.as_view(), name='export_transactions'),
     path('transactions/import/', ImportTransactionsView.as_view(), name='import_transactions'),
@@ -75,4 +88,5 @@ urlpatterns = [
     path('ai/assistant/send/', assistant_send, name='assistant_send'),
     path('debug/ocr/', debug_ocr_text, name='debug_ocr'),  # Debug endpoint
     path('ai/budget-suggestions/', ai_budget_suggestions, name='ai_budget_suggestions'),
+    path('ai/recurring-suggestions/', ai_recurring_suggestions, name='ai_recurring_suggestions'),
 ] + router.urls

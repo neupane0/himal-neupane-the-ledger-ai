@@ -117,6 +117,177 @@ def send_reminder_email(to_email: str, reminder_title: str, amount: float, due_d
         return False
 
 
+def send_otp_email(to_email: str, username: str, otp_code: str) -> bool:
+    """Send an OTP password-reset email."""
+    if not to_email:
+        return False
+
+    subject = "Ledger AI: Your Password Reset Code"
+    html_message = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 0; background-color: #f4f4f5; }}
+            .container {{ max-width: 600px; margin: 0 auto; padding: 40px 20px; }}
+            .card {{ background: white; border-radius: 16px; padding: 32px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }}
+            .logo {{ font-size: 24px; font-weight: bold; color: #18181b; text-align: center; margin-bottom: 24px; }}
+            .otp {{ font-size: 48px; font-weight: bold; letter-spacing: 12px; color: #18181b; text-align: center; margin: 28px 0; background: #f4f4f5; border-radius: 12px; padding: 20px; }}
+            .note {{ font-size: 13px; color: #71717a; text-align: center; margin-top: 16px; }}
+            .footer {{ text-align: center; margin-top: 24px; font-size: 12px; color: #a1a1aa; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="card">
+                <div class="logo">💰 Ledger AI</div>
+                <h2 style="text-align:center; color:#18181b;">Password Reset</h2>
+                <p style="color:#52525b; text-align:center;">Hi {username}, use the code below to reset your password. It expires in <strong>10 minutes</strong>.</p>
+                <div class="otp">{otp_code}</div>
+                <p class="note">If you didn't request a password reset, you can safely ignore this email.</p>
+                <div class="footer">Ledger AI · Secure Finance Tracker</div>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    from django.utils.html import strip_tags
+    plain_message = strip_tags(html_message)
+    try:
+        sent = send_mail(
+            subject=subject,
+            message=plain_message,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[to_email],
+            html_message=html_message,
+            fail_silently=False,
+        )
+        return bool(sent)
+    except Exception as e:
+        logger.error(f"Error sending OTP email: {e}")
+        return False
+
+
+def send_payment_info_request_email(to_email: str, to_username: str, from_username: str, group_name: str) -> bool:
+    """Ask a group member to add their payment info so others can settle debts."""
+    if not to_email:
+        return False
+    subject = f"Ledger AI: {from_username} needs your payment info for '{group_name}'"
+    html_message = f"""
+    <!DOCTYPE html><html><head>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin:0; padding:0; background:#f4f4f5; }}
+        .container {{ max-width:600px; margin:0 auto; padding:40px 20px; }}
+        .card {{ background:white; border-radius:16px; padding:32px; box-shadow:0 4px 6px -1px rgba(0,0,0,0.1); }}
+        .logo {{ font-size:24px; font-weight:bold; color:#18181b; text-align:center; margin-bottom:24px; }}
+        .highlight {{ background:#f4f4f5; border-radius:12px; padding:16px 20px; margin:20px 0; font-size:15px; color:#18181b; }}
+        .btn {{ display:inline-block; background:#18181b; color:#fff; padding:12px 28px; border-radius:10px; text-decoration:none; font-weight:600; margin-top:20px; }}
+        .footer {{ text-align:center; margin-top:24px; font-size:12px; color:#a1a1aa; }}
+    </style></head><body>
+    <div class="container"><div class="card">
+        <div class="logo">💰 Ledger AI</div>
+        <h2 style="text-align:center;color:#18181b;">Payment Info Needed</h2>
+        <p style="color:#52525b;">Hi <strong>{to_username}</strong>,</p>
+        <p style="color:#52525b;">
+            <strong>{from_username}</strong> wants to settle their share in the group
+            <strong>"{group_name}"</strong> and needs your payment details.
+        </p>
+        <div class="highlight">
+            Please add your <strong>eSewa ID</strong> or <strong>bank account number</strong>
+            in your Ledger AI profile so your group members can pay you.
+        </div>
+        <p style="color:#52525b;">Log in to Ledger AI → Profile → Payment Info to add your details.</p>
+        <div class="footer">Ledger AI · Shared Expense Tracker</div>
+    </div></div></body></html>
+    """
+    from django.utils.html import strip_tags
+    try:
+        sent = send_mail(
+            subject=subject,
+            message=strip_tags(html_message),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[to_email],
+            html_message=html_message,
+            fail_silently=False,
+        )
+        return bool(sent)
+    except Exception as e:
+        logger.error(f"Error sending payment info request email: {e}")
+        return False
+
+
+def send_budget_alert_email(to_email: str, username: str, category: str, spent: float, limit: float, percent: int) -> bool:
+    """Send a budget threshold alert (90% or 100%+) to the user."""
+    if not to_email:
+        return False
+
+    over = percent >= 100
+    color = '#dc2626' if over else '#f59e0b'
+    label = 'Over Budget' if over else 'Budget Warning'
+    subject = f"Ledger AI: {'Over budget' if over else 'Approaching budget limit'} — {category}"
+
+    html_message = f"""
+    <!DOCTYPE html><html><head>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin:0; padding:0; background:#f4f4f5; }}
+        .container {{ max-width:600px; margin:0 auto; padding:40px 20px; }}
+        .card {{ background:white; border-radius:16px; padding:32px; box-shadow:0 4px 6px -1px rgba(0,0,0,0.1); }}
+        .logo {{ font-size:24px; font-weight:bold; color:#18181b; text-align:center; margin-bottom:24px; }}
+        .badge {{ display:inline-block; background:{color}22; color:{color}; font-size:13px; font-weight:700;
+                  padding:4px 14px; border-radius:999px; margin-bottom:16px; }}
+        .bar-wrap {{ background:#f4f4f5; border-radius:999px; height:12px; margin:16px 0; overflow:hidden; }}
+        .bar-fill {{ background:{color}; height:12px; border-radius:999px; width:{min(percent, 100)}%; }}
+        .stats {{ display:flex; gap:20px; margin:20px 0; }}
+        .stat {{ flex:1; background:#f9f9f9; border-radius:12px; padding:14px 16px; }}
+        .stat-label {{ font-size:11px; color:#71717a; text-transform:uppercase; letter-spacing:.05em; }}
+        .stat-value {{ font-size:22px; font-weight:700; color:#18181b; margin-top:4px; }}
+        .footer {{ text-align:center; margin-top:24px; font-size:12px; color:#a1a1aa; }}
+    </style></head><body>
+    <div class="container"><div class="card">
+        <div class="logo">💰 Ledger AI</div>
+        <div style="text-align:center;">
+            <span class="badge">{label}</span>
+            <h2 style="color:#18181b;margin:0 0 8px;">{category} Budget</h2>
+            <p style="color:#52525b;">Hi <strong>{username}</strong>, you've used <strong>{percent}%</strong> of your {category} budget{"" if not over else " and gone over the limit"}.</p>
+        </div>
+        <div class="bar-wrap"><div class="bar-fill"></div></div>
+        <div class="stats">
+            <div class="stat">
+                <div class="stat-label">Spent</div>
+                <div class="stat-value" style="color:{color};">${spent:,.2f}</div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">Budget Limit</div>
+                <div class="stat-value">${limit:,.2f}</div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">{"Over by" if over else "Remaining"}</div>
+                <div class="stat-value" style="color:{'#dc2626' if over else '#16a34a'};">
+                    ${'%.2f' % abs(limit - spent)}
+                </div>
+            </div>
+        </div>
+        <p style="color:#52525b;font-size:14px;">
+            {'Consider reviewing your spending in this category to avoid going further over budget.' if over else 'You are close to your limit. Review your upcoming expenses to stay on track.'}
+        </p>
+        <div class="footer">Ledger AI · Smart Budget Alerts</div>
+    </div></div></body></html>
+    """
+    try:
+        sent = send_mail(
+            subject=subject,
+            message=strip_tags(html_message),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[to_email],
+            html_message=html_message,
+            fail_silently=False,
+        )
+        return bool(sent)
+    except Exception as e:
+        logger.error(f"Error sending budget alert email: {e}")
+        return False
+
+
 def send_due_reminders():
     """
     Check for reminders due soon and send email notifications.

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Card, Button, Input } from '../components/UI';
-import { User, Mail, Lock, Shield, CheckCircle, XCircle, Copy, Loader2 } from 'lucide-react';
-import { incomeSources, profile as profileApi } from '../services/api';
+import { User, Mail, Lock, Shield, CheckCircle, XCircle, Copy, Loader2, Wallet } from 'lucide-react';
+import { incomeSources, profile as profileApi, paymentInfo as paymentInfoApi } from '../services/api';
 import { IncomeSource, UserProfile } from '../types';
 
 type TwoFAStep = 'idle' | 'loading' | 'scan' | 'verify' | 'disable';
@@ -32,6 +32,13 @@ const Profile: React.FC = () => {
     const [twoFAError, setTwoFAError] = useState('');
     const [is2FAEnabled, setIs2FAEnabled] = useState(false);
 
+    // ── Payment Info ──────────────────────────────────────────────
+    const [esewaId, setEsewaId] = useState('');
+    const [bankName, setBankName] = useState('');
+    const [bankAccount, setBankAccount] = useState('');
+    const [payInfoMsg, setPayInfoMsg] = useState('');
+    const [payInfoLoading, setPayInfoLoading] = useState(false);
+
     // ── Income Sources ────────────────────────────────────────────
     const [sources, setSources] = useState<IncomeSource[]>([]);
     const [isLoading, setIsLoading] = useState(false);
@@ -56,6 +63,9 @@ const Profile: React.FC = () => {
             setFirstName(p.first_name || '');
             setLastName(p.last_name || '');
             setIs2FAEnabled(p.is_2fa_enabled);
+            setEsewaId(p.esewa_id || '');
+            setBankName(p.bank_name || '');
+            setBankAccount(p.bank_account_number || '');
         } catch (e) {
             console.error('Failed to load profile', e);
         } finally {
@@ -411,6 +421,60 @@ const Profile: React.FC = () => {
                             </table>
                         </div>
                     )}
+                </div>
+            </Card>
+
+            {/* ── Payment Info ── */}
+            <Card>
+                <div className="flex items-center gap-2 mb-6">
+                    <Wallet size={18} className="text-zinc-500" />
+                    <h2 className="text-base font-semibold text-zinc-900">Payment Info</h2>
+                </div>
+                <p className="text-sm text-zinc-500 mb-5">
+                    Add your payment details so group members can settle debts with you.
+                </p>
+                <div className="space-y-4">
+                    <Input
+                        label="eSewa ID / Phone Number"
+                        placeholder="e.g. 9841234567"
+                        value={esewaId}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEsewaId(e.target.value)}
+                    />
+                    <div className="grid grid-cols-2 gap-3">
+                        <Input
+                            label="Bank Name"
+                            placeholder="e.g. NIC Asia Bank"
+                            value={bankName}
+                            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setBankName(e.target.value)}
+                        />
+                        <Input
+                            label="Bank Account Number"
+                            placeholder="e.g. 1234567890123"
+                            value={bankAccount}
+                            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setBankAccount(e.target.value)}
+                        />
+                    </div>
+                    {payInfoMsg && (
+                        <p className="text-sm text-emerald-600 font-medium">{payInfoMsg}</p>
+                    )}
+                    <Button
+                        variant="primary"
+                        disabled={payInfoLoading}
+                        onClick={async () => {
+                            setPayInfoLoading(true);
+                            setPayInfoMsg('');
+                            try {
+                                await paymentInfoApi.update({ esewa_id: esewaId, bank_name: bankName, bank_account_number: bankAccount });
+                                setPayInfoMsg('Payment info saved!');
+                            } catch {
+                                setPayInfoMsg('Failed to save. Please try again.');
+                            } finally {
+                                setPayInfoLoading(false);
+                            }
+                        }}
+                    >
+                        {payInfoLoading ? 'Saving…' : 'Save Payment Info'}
+                    </Button>
                 </div>
             </Card>
         </div>

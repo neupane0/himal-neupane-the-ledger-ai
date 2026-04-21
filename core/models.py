@@ -5,10 +5,14 @@ from dateutil.relativedelta import relativedelta
 
 
 class UserProfile(models.Model):
-    """Extended user profile with 2FA support."""
+    """Extended user profile with 2FA support and payment info."""
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="profile")
     totp_secret = models.CharField(max_length=64, blank=True, default="")
     is_2fa_enabled = models.BooleanField(default=False)
+    # Payment info for group expense settlements
+    esewa_id = models.CharField(max_length=100, blank=True, default="")
+    bank_name = models.CharField(max_length=100, blank=True, default="")
+    bank_account_number = models.CharField(max_length=50, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -94,6 +98,10 @@ class Budget(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # Alert tracking — reset when limit_amount changes
+    alert_90_sent = models.BooleanField(default=False)
+    alert_100_sent = models.BooleanField(default=False)
+
     class Meta:
         ordering = ["-month", "category"]
         unique_together = ["owner", "category", "month"]
@@ -139,6 +147,88 @@ class Reminder(models.Model):
     def is_overdue(self):
         from datetime import date
         return not self.is_paid and self.due_date < date.today()
+
+
+class PasswordResetOTP(models.Model):
+    """One-time password for account recovery (expires in 10 minutes)."""
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="password_reset_otps")
+    otp_code = models.CharField(max_length=6)
+    is_used = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def is_valid(self):
+        from django.utils import timezone
+        return not self.is_used and timezone.now() <= self.expires_at
+
+    def __str__(self):
+        return f"OTP for {self.user.username} ({'used' if self.is_used else 'active'})"
+
+
+class Group(models.Model):
+    """A shared expense group."""
+    name = models.CharField(max_length=200)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="created_groups")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return self.name
+
+
+class GroupMembership(models.Model):
+    """A user's membership in a group."""
+    group = models.ForeignKey(Group, on_delete=models.CASCADE, related_name="memberships")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="group_memberships")
+    joined_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ["group", "user"]
+
+    def __str__(self):
+        return f"{self.user.username} in {self.group.name}"
+
+
+class GroupExpense(models.Model):
+    """An expense within a group, split equally among all members."""
+    group = models.ForeignKey(Group, on_delete=models.CASCADE, related_name="expenses")
+    title = models.CharField(max_length=200)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    paid_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="group_expenses_paid")
+    date = models.DateField(default=timezone.now)
+    notes = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date", "-id"]
+
+    def __str__(self):
+        return f"{self.title} - ${self.amount} (paid by {self.paid_by.username})"
+
+
+class GroupPayment(models.Model):
+    """Records a manual payment between two group members to settle shared debt."""
+    group = models.ForeignKey(Group, on_delete=models.CASCADE, related_name="payments")
+    paid_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="group_payments_made")
+    paid_to = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="group_payments_received")
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    is_confirmed = models.BooleanField(default=False)
+    note = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        status = "confirmed" if self.is_confirmed else "pending"
+        return f"{self.paid_by.username} → {self.paid_to.username} ${self.amount} ({status})"
 
 
 class RecurringTransaction(models.Model):

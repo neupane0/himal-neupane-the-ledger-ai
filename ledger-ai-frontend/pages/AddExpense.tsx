@@ -229,7 +229,7 @@ const AddExpense: React.FC = () => {
 
           setForm({
             title: data.title || 'Unknown Merchant',
-            amount: data.amount || 0,
+            amount: String(data.amount || 0),
             date: data.date || new Date().toISOString().split('T')[0],
             category: data.category || 'Other',
             source: 'Receipt',

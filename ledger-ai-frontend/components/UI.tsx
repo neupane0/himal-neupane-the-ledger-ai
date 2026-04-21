@@ -51,7 +51,7 @@ export const Button: React.FC<ButtonProps> = ({ children, variant = 'primary', s
 // Card — premium glass/soft-UI variant
 // ---------------------------------------------------------------------------
 
-interface CardProps {
+interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
   children: ReactNode;
   className?: string;
   title?: string;
@@ -61,9 +61,10 @@ interface CardProps {
   noHover?: boolean;
 }
 
-export const Card: React.FC<CardProps> = ({ children, className = '', title, subtitle, ai = false, noHover = false }) => {
+export const Card: React.FC<CardProps> = ({ children, className = '', title, subtitle, ai = false, noHover = false, ...props }) => {
   return (
     <div
+      {...props}
       className={`
         rounded-2xl p-6
         ${ai
@@ -181,7 +182,7 @@ export const StatNumber: React.FC<{ value: number; prefix?: string; suffix?: str
   className = '',
 }) => {
   const [displayed, setDisplayed] = useState(0);
-  const ref = useRef<number>();
+  const ref = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     const start = displayed;

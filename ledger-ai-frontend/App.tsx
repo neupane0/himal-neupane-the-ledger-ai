@@ -16,7 +16,7 @@ import RecurringTransactions from './pages/RecurringTransactions';
 import Profile from './pages/Profile';
 import CategoryAnalytics from './pages/CategoryAnalytics';
 import Assistant from './pages/Assistant';
-import { Login, Register } from './pages/Auth';
+import { Login, Register, ForgotPassword } from './pages/Auth';
 import { AppRoute } from './types';
 
 const App: React.FC = () => {
@@ -27,6 +27,7 @@ const App: React.FC = () => {
           <Route path={AppRoute.LANDING} element={<Landing />} />
           <Route path={AppRoute.LOGIN} element={<Login />} />
           <Route path={AppRoute.REGISTER} element={<Register />} />
+          <Route path={AppRoute.FORGOT_PASSWORD} element={<ForgotPassword />} />
 
           <Route path={AppRoute.DASHBOARD} element={<Dashboard />} />
           <Route path={AppRoute.ASSISTANT} element={<Assistant />} />

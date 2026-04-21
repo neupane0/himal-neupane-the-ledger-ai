@@ -2,10 +2,10 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Card, Button, Badge, Input, Select } from '../components/UI';
 import {
   Plus, Repeat, Trash2, Pause, Play, X, Calendar,
-  DollarSign, Tag, FileText, Clock, Loader2,
+  DollarSign, Tag, FileText, Clock, Loader2, Sparkles, ChevronDown, ChevronUp,
 } from 'lucide-react';
-import { recurringTransactions } from '../services/api';
-import { RecurringTransaction, RecurringTransactionCreateRequest } from '../types';
+import { recurringTransactions, ai as aiApi } from '../services/api';
+import { RecurringTransaction, RecurringTransactionCreateRequest, RecurringSuggestion } from '../types';
 import { TRANSACTION_CATEGORIES } from '../constants/categories';
 
 // ---------------------------------------------------------------------------
@@ -51,6 +51,13 @@ const RecurringTransactions: React.FC = () => {
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  // AI suggestions
+  const [suggestions, setSuggestions] = useState<RecurringSuggestion[]>([]);
+  const [suggestionSummary, setSuggestionSummary] = useState('');
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [addingSuggestion, setAddingSuggestion] = useState<number | null>(null);
+
   // Form state
   const [form, setForm] = useState<RecurringTransactionCreateRequest>({
     title: '',
@@ -93,6 +100,40 @@ const RecurringTransactions: React.FC = () => {
     }
     return total;
   }, [activeRules]);
+
+  const fetchSuggestions = async () => {
+    setSuggestionsLoading(true);
+    try {
+      const res = await aiApi.recurringSuggestions();
+      setSuggestions(res.data.suggestions);
+      setSuggestionSummary(res.data.summary);
+      setShowSuggestions(true);
+    } catch {
+      setSuggestionSummary('Failed to load suggestions.');
+      setShowSuggestions(true);
+    } finally {
+      setSuggestionsLoading(false);
+    }
+  };
+
+  const handleAddSuggestion = async (s: RecurringSuggestion, idx: number) => {
+    setAddingSuggestion(idx);
+    try {
+      await recurringTransactions.create({
+        title: s.title,
+        amount: s.amount,
+        category: s.category,
+        frequency: s.frequency,
+        start_date: new Date().toISOString().split('T')[0],
+      });
+      setSuggestions(prev => prev.filter((_, i) => i !== idx));
+      fetchRules();
+    } catch {
+      alert('Failed to add recurring rule.');
+    } finally {
+      setAddingSuggestion(null);
+    }
+  };
 
   // Actions
   const handleCreate = async (e: React.FormEvent) => {
@@ -147,10 +188,16 @@ const RecurringTransactions: React.FC = () => {
           <h1 className="text-2xl font-bold text-zinc-900 tracking-tight">Recurring</h1>
           <p className="text-sm text-zinc-400 mt-0.5">Autopilot expenses that generate transactions for you.</p>
         </div>
-        <Button onClick={() => setShowForm(true)} size="sm">
-          <Plus size={15} strokeWidth={1.5} />
-          Add Rule
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="ghost" size="sm" onClick={fetchSuggestions} isLoading={suggestionsLoading}>
+            <Sparkles size={15} strokeWidth={1.5} />
+            AI Suggestions
+          </Button>
+          <Button onClick={() => setShowForm(true)} size="sm">
+            <Plus size={15} strokeWidth={1.5} />
+            Add Rule
+          </Button>
+        </div>
       </div>
 
       {/* Summary Strips */}
@@ -170,6 +217,49 @@ const RecurringTransactions: React.FC = () => {
           <p className="text-2xl font-bold text-zinc-900 tabular-nums mt-1">{rules.length}</p>
         </Card>
       </div>
+
+      {/* ── AI Suggestions Panel ──────────────────────────────────── */}
+      {showSuggestions && (
+        <Card noHover className="page-enter">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Sparkles size={16} strokeWidth={1.5} className="text-violet-500" />
+              <p className="text-sm font-semibold text-zinc-800">AI Suggestions</p>
+            </div>
+            <button onClick={() => setShowSuggestions(false)} className="p-1 rounded-lg text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 transition-colors">
+              <X size={15} strokeWidth={1.5} />
+            </button>
+          </div>
+          <p className="text-xs text-zinc-500 mb-4">{suggestionSummary}</p>
+          {suggestions.length === 0 ? (
+            <p className="text-sm text-zinc-400 text-center py-4">No new patterns detected.</p>
+          ) : (
+            <div className="space-y-2">
+              {suggestions.map((s, i) => (
+                <div key={i} className="flex items-center gap-3 p-3 rounded-xl bg-zinc-50/60 border border-zinc-100">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-semibold text-zinc-800 truncate">{s.title}</p>
+                      <span className="text-[11px] text-zinc-400 bg-zinc-100 px-2 py-0.5 rounded-full capitalize">{s.frequency}</span>
+                    </div>
+                    <p className="text-xs text-zinc-400 mt-0.5">${s.amount.toFixed(2)} · {s.category} · {s.reason}</p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="flex-shrink-0 text-violet-600 hover:bg-violet-50"
+                    isLoading={addingSuggestion === i}
+                    onClick={() => handleAddSuggestion(s, i)}
+                  >
+                    <Plus size={14} strokeWidth={1.5} />
+                    Add
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
 
       {/* ── Modal-like Create Form ─────────────────────────────────── */}
       {showForm && (

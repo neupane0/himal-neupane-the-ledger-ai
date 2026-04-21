@@ -254,7 +254,7 @@ const Reminders: React.FC = () => {
                                             {reminder.title}
                                         </h3>
                                         {reminder.email_reminder && (
-                                            <Mail size={12} className="text-zinc-400" title="Email reminder enabled" />
+                                            <Mail size={12} className="text-zinc-400" aria-label="Email reminder enabled" />
                                         )}
                                         {reminder.frequency !== 'once' && (
                                             <span className="text-xs bg-zinc-100 px-2 py-0.5 rounded text-zinc-500">
